@@ -35,3 +35,8 @@ omnimcp = "omnimcp.run_omnimcp:main"
 
 [tool.setuptools]
 packages = ["omnimcp"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
+]

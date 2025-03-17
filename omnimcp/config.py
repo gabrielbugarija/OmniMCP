@@ -57,8 +57,9 @@ class OmniMCPConfig(BaseSettings):
     @property
     def AWS_EC2_KEY_PATH(self) -> str:
         """Get the path to the EC2 key file."""
-        script_dir = str(Path(__file__).parent.parent.joinpath("omniparser/server"))
-        return os.path.join(script_dir, f"{self.AWS_EC2_KEY_NAME}.pem")
+        # Store key files in the root directory
+        root_dir = str(Path(__file__).parent.parent)
+        return os.path.join(root_dir, f"{self.AWS_EC2_KEY_NAME}.pem")
 
     @property
     def AWS_EC2_SECURITY_GROUP(self) -> str:
