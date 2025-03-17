@@ -136,10 +136,19 @@ class ActionResult:
 Current implementation:
 ```
 ./
-├── utils.py              # Core utilities and input control
-├── omniparser/
-│   ├── client.py        # Parser client and provider
-│   └── server.py        # Parser deployment and management
+├── omnimcp/             # Main package directory
+│   ├── omnimcp.py       # Core implementation with OmniMCP class and VisualState
+│   ├── input.py         # Input controller for UI interactions
+│   ├── types.py         # Type definitions (Bounds, UIElement, etc.)
+│   ├── utils.py         # Utilities for screenshots, coordinates, etc.
+│   ├── config.py        # Centralized configuration
+│   └── omniparser/      # UI parsing functionality
+│       ├── client.py    # Parser client and provider
+│       └── server.py    # Parser deployment and management
+├── tests/               # Test directory
+│   ├── test_synthetic_ui.py  # Synthetic UI generation for testing
+│   └── test_omnimcp.py       # Core functionality tests
+└── run_omnimcp.py       # Command-line entry point
 ```
 
 Planned expansion:
@@ -155,6 +164,32 @@ Planned expansion:
 └── mcp/                # Future: MCP implementation
     └── server.py
 ```
+
+## Package Management
+
+OmniMCP uses `uv` for dependency management. When adding new dependencies, use:
+
+```bash
+uv add <package-name>       # Add a regular dependency
+uv add --dev <package-name> # Add a development dependency
+uv pip install -e .         # Install all dependencies
+```
+
+This ensures dependencies are properly recorded in pyproject.toml.
+
+## Configuration System
+
+OmniMCP now uses a centralized configuration system with:
+
+- Settings loaded from environment variables and `.env` file
+- Default values for all settings
+- Support for various configuration types:
+  - Claude API settings
+  - OmniParser connection settings 
+  - AWS deployment configuration
+  - Debug and logging settings
+
+To configure OmniMCP, create a `.env` file in the project root with your settings:
 
 ## Implementation Notes
 
@@ -186,6 +221,20 @@ class ToolError:
 2. Integration tests for flows
 3. Visual verification
 4. Performance benchmarks
+
+### Synthetic UI Testing
+OmniMCP includes tools for generating synthetic test UIs with:
+
+- Predefined UI elements (buttons, text fields, checkboxes)
+- Before/after image pairs for action verification
+- Element visualization for debugging
+
+This approach offers several advantages:
+- Works across all platforms
+- Runs in any environment (including CI)
+- Provides deterministic results 
+- Doesn't require actual displays
+- Enables testing different scenarios
 
 ## Example Implementation Flow
 
