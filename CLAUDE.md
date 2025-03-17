@@ -133,20 +133,27 @@ class ActionResult:
 
 ## Code Structure
 
+Current implementation:
 ```
-omnimcp/
-├── core/
-│   ├── visual_state.py    # State management
-│   ├── element.py         # UI element class
-│   └── targeting.py       # Element targeting
-├── mcp/
-│   ├── server.py          # MCP implementation
-│   └── protocol.py        # Protocol definitions
-├── input/
-│   ├── keyboard.py        # Keyboard control
-│   └── mouse.py           # Mouse control
-└── parser/
-    └── provider.py        # UI parser integration
+./
+├── utils.py              # Core utilities and input control
+├── omniparser/
+│   ├── client.py        # Parser client and provider
+│   └── server.py        # Parser deployment and management
+```
+
+Planned expansion:
+```
+./
+├── utils.py              # Core utilities and input control
+├── omniparser/          # UI parsing functionality
+│   ├── client.py        # Parser client and provider
+│   └── server.py        # Parser deployment and management
+├── core/               # Future: Core state management
+│   ├── visual_state.py
+│   └── element.py
+└── mcp/                # Future: MCP implementation
+    └── server.py
 ```
 
 ## Implementation Notes
@@ -287,18 +294,21 @@ class VisualState:
 
 ### 3. UI Parser Integration 
 ```python
-class UIParserProvider:
-    """Provides UI parsing capabilities.
+class OmniParserClient:
+    """Client for interacting with the OmniParser API."""
     
-    Handles deployment and management of parser service.
-    """
-    
-    def parse_screenshot(self, image: bytes) -> Dict:
-        """Parse screenshot into UI elements."""
+    def parse_image(self, image: Image.Image) -> Dict[str, Any]:
+        """Parse an image using the OmniParser service."""
         
+    def check_server_available(self) -> bool:
+        """Check if the OmniParser server is available."""
+
+class OmniParserProvider:
+    """Provider for OmniParser services with deployment capabilities."""
+    
     def deploy(self) -> bool:
-        """Deploy parser service if needed."""
-        
+        """Deploy OmniParser if not already running."""
+    
     def is_available(self) -> bool:
         """Check if parser is available."""
 ```
