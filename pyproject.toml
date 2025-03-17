@@ -14,15 +14,20 @@ authors = [
 ]
 
 dependencies = [
-    "pynput>=1.7.6",           # Keyboard and mouse control
-    "pillow>=10.0.0",          # Image processing
-    "fire>=0.4.0",             # CLI functionality
-    "anthropic>=0.42.0",       # Claude API
-    "loguru>=0.6.0",           # Logging
-    "mcp>=0.9.0",              # Model Control Protocol
-    "requests>=2.31.0",        # HTTP requests for OmniParser
-    "mss>=6.1.0",              # Screen capture
-    "jinja2>=3.0.0", 					 # For templating
+    "pynput>=1.7.6", # Keyboard and mouse control
+    "pillow>=10.0.0", # Image processing
+    "fire>=0.4.0", # CLI functionality
+    "anthropic>=0.42.0", # Claude API
+    "loguru>=0.6.0", # Logging
+    "mcp>=0.9.0", # Model Control Protocol
+    "requests>=2.31.0", # HTTP requests for OmniParser
+    "mss>=6.1.0", # Screen capture
+    "jinja2>=3.0.0", # For templating
+    "botocore>=1.37.13",
+    "boto3>=1.37.13",
+    "paramiko>=3.5.1",
+    "pydantic-settings>=2.8.1",
+    "numpy>=2.2.4",
 ]
 
 [project.scripts]

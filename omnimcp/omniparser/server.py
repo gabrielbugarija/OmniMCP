@@ -1,66 +1,18 @@
 """Deployment module for OmniParser on AWS EC2."""
 
 import os
-import pathlib
 import subprocess
 import time
 
 from botocore.exceptions import ClientError
 from loguru import logger
-from pydantic_settings import BaseSettings
 import boto3
 import fire
 import paramiko
 
+from ..config import config
 
 CLEANUP_ON_FAILURE = False
-
-
-class Config(BaseSettings):
-    """Configuration settings for deployment."""
-
-    AWS_ACCESS_KEY_ID: str
-    AWS_SECRET_ACCESS_KEY: str
-    AWS_REGION: str
-
-    PROJECT_NAME: str = "omniparser"
-    REPO_URL: str = "https://github.com/microsoft/OmniParser.git"
-    AWS_EC2_AMI: str = "ami-06835d15c4de57810"
-    AWS_EC2_DISK_SIZE: int = 128  # GB
-    AWS_EC2_INSTANCE_TYPE: str = "g4dn.xlarge"  # (T4 16GB $0.526/hr x86_64)
-    AWS_EC2_USER: str = "ubuntu"
-    PORT: int = 8000  # FastAPI port
-    COMMAND_TIMEOUT: int = 600  # 10 minutes
-
-    class Config:
-        """Pydantic configuration class."""
-
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-
-    @property
-    def CONTAINER_NAME(self) -> str:
-        """Get the container name."""
-        return f"{self.PROJECT_NAME}-container"
-
-    @property
-    def AWS_EC2_KEY_NAME(self) -> str:
-        """Get the EC2 key pair name."""
-        return f"{self.PROJECT_NAME}-key"
-
-    @property
-    def AWS_EC2_KEY_PATH(self) -> str:
-        """Get the path to the EC2 key file."""
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(script_dir, f"{self.AWS_EC2_KEY_NAME}.pem")
-
-    @property
-    def AWS_EC2_SECURITY_GROUP(self) -> str:
-        """Get the EC2 security group name."""
-        return f"{self.PROJECT_NAME}-SecurityGroup"
-
-
-config = Config()
 
 
 def create_key_pair(

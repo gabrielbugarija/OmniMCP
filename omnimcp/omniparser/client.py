@@ -8,7 +8,7 @@ import requests
 from PIL import Image
 
 from ..utils import image_to_base64
-from .server.deploy import Deploy
+from .server import Deploy
 
 
 class OmniParserClient:
