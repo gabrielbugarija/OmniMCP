@@ -634,3 +634,112 @@ Note: The current implementation in `omnimcp.py` represents the API design based
 4. Implementation of actual tool logic
 
 This design serves as a starting point for implementing a compliant MCP server for UI understanding.
+
+## Testing Strategy
+
+### Synthetic UI Testing
+
+For testing visual understanding without relying on real UIs or displays, we'll use programmatically generated images:
+
+```python
+def generate_test_ui():
+    """Generate synthetic UI image with known elements."""
+    from PIL import Image, ImageDraw
+    
+    # Create blank canvas
+    img = Image.new('RGB', (800, 600), color='white')
+    draw = ImageDraw.Draw(img)
+    
+    # Draw UI elements with known positions
+    elements = []
+    
+    # Button
+    draw.rectangle([(100, 100), (200, 150)], fill='blue', outline='black')
+    draw.text((110, 115), "Submit", fill="white")
+    elements.append({
+        "type": "button",
+        "content": "Submit",
+        "bounds": {"x": 100, "y": 100, "width": 100, "height": 50},
+        "confidence": 1.0
+    })
+    
+    # Text field
+    draw.rectangle([(300, 100), (500, 150)], fill='white', outline='black')
+    draw.text((310, 115), "Username", fill="gray")
+    elements.append({
+        "type": "text_field",
+        "content": "Username",
+        "bounds": {"x": 300, "y": 100, "width": 200, "height": 50},
+        "confidence": 1.0
+    })
+    
+    return img, elements
+```
+
+### Action Verification Testing
+
+For testing action verification, we'll generate before/after image pairs:
+
+```python
+def generate_action_test_pair(action_type="click"):
+    """Generate before/after UI image pair for a specific action."""
+    before_img, elements = generate_test_ui()
+    after_img = before_img.copy()
+    after_draw = ImageDraw.Draw(after_img)
+    
+    if action_type == "click":
+        # Show button in pressed state
+        after_draw.rectangle([(100, 100), (200, 150)], fill='darkblue', outline='black')
+        after_draw.text((110, 115), "Submit", fill="white")
+        # Add success message
+        after_draw.text((100, 170), "Form submitted!", fill="green")
+    
+    elif action_type == "type":
+        # Show text entered in field
+        after_draw.rectangle([(300, 100), (500, 150)], fill='white', outline='black')
+        after_draw.text((310, 115), "testuser", fill="black")
+    
+    return before_img, after_img, elements
+```
+
+### Test Implementation
+
+Testing Claude integration with synthetic images:
+
+```python
+async def test_element_finding():
+    """Test Claude's ability to find elements in synthetic UI."""
+    # Generate test image with known elements
+    test_img, elements = generate_test_ui()
+    
+    # Mock screenshot capture to return test image
+    with patch('omnimcp.utils.take_screenshot', return_value=test_img):
+        # Setup OmniMCP with mock parser that returns our elements
+        # ... 
+        
+        # Test with various descriptions
+        descriptions = [
+            "submit button",
+            "blue button",
+            "the username field",
+            "textbox in the middle",
+        ]
+        
+        for desc in descriptions:
+            # Call find_element with each description
+            element = await mcp._visual_state.find_element(desc)
+            # Verify the correct element was found
+            # ...
+```
+
+This testing approach:
+- Works across all platforms
+- Runs in any environment (including CI)
+- Provides deterministic results
+- Doesn't require actual displays or UI
+- Allows testing a variety of scenarios
+
+For real UI action testing, we'll start with manual verification while developing more sophisticated test environments.
+
+Focus on implementing the core functionality first, then expand the testing framework.
+

@@ -7,8 +7,8 @@ from loguru import logger
 import requests
 from PIL import Image
 
-from omnimcp.utils import image_to_base64
-from omnimcp.omniparser.server.deploy import Deploy
+from ..utils import image_to_base64
+from .server.deploy import Deploy
 
 
 class OmniParserClient:

@@ -1,8 +1,8 @@
-from typing import Optional, Literal
+from typing import Optional, Literal, List
 
 from pynput import keyboard, mouse
 
-from omnimcp.types import bounds
+from .types import Bounds
 
 
 class InputController:

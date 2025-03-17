@@ -6,15 +6,17 @@ and interaction. It allows AI models like Claude to observe and interact with us
 through screenshots, element detection, and input simulation.
 """
 
+import io
 import time
 from typing import List, Optional, Dict, Any, Literal, Tuple
 
+import numpy as np
 from mcp.server.fastmcp import FastMCP
 from PIL import Image
 from loguru import logger
 
-from omniparser.client import OmniParserProvider
-from utils import (
+from .omniparser.client import OmniParserProvider
+from .utils import (
     take_screenshot,
     normalize_coordinates,
     denormalize_coordinates,
@@ -23,7 +25,7 @@ from utils import (
     MouseController,
     KeyboardController,
 )
-from omnimcp.types import (
+from .types import (
     Bounds,
     UIElement,
     ScreenState,
@@ -135,11 +137,12 @@ class VisualState:
             )
 
         # Create prompt with element descriptions and screenshot
+        elements_str = "\n".join(element_descriptions)
         prompt = f"""
         Find the UI element that best matches this description: "{description}"
         
         Available elements:
-        {'\n'.join(element_descriptions)}
+        {elements_str}
         
         Return ONLY the index number of the best matching element. If no good match exists, return -1.
         """

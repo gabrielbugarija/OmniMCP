@@ -73,14 +73,14 @@ class InteractionResult:
 class ScrollResult(InteractionResult):
     """Result of a scroll action."""
 
-    scroll_amount: float
+    scroll_amount: float = 0.0
 
 
 @dataclass
 class TypeResult(InteractionResult):
     """Result of typing text."""
 
-    text_entered: str
+    text_entered: str = ""
 
 
 @dataclass

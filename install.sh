@@ -29,7 +29,10 @@ else
 fi
 echo ""
 echo "To run OmniMCP:"
-echo "  omnimcp cli    # For CLI mode"
-echo "  omnimcp server # For MCP server mode"
-echo "  omnimcp debug  # For debug mode"
+echo "  python -m run_omnimcp cli    # For CLI mode"
+echo "  python -m run_omnimcp server # For MCP server mode"
+echo "  python -m run_omnimcp debug  # For debug mode"
+echo ""
+echo "To run tests:"
+echo "  python tests/test_synthetic_ui.py  # Generate test UI images"
 echo ""
