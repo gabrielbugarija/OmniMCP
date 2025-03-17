@@ -623,3 +623,14 @@ prompt = analyze_template.render(
 prompt = render_prompt("""
     Quick analysis: {{ element.description }}
 """, element=ui_element)
+
+## Implementation Status
+
+Note: The current implementation in `omnimcp.py` represents the API design based on MCP specifications but has not been tested with actual MCP server implementations yet. The types and tools are defined but require:
+
+1. Integration testing with MCP SDK
+2. Verification of tool definitions
+3. Testing with Claude and other MCP clients
+4. Implementation of actual tool logic
+
+This design serves as a starting point for implementing a compliant MCP server for UI understanding.

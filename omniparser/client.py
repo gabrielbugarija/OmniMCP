@@ -1,4 +1,5 @@
 """Client for interacting with the OmniParser server."""
+
 from typing import Dict, Any, Optional
 import io
 
@@ -9,12 +10,13 @@ from PIL import Image
 from omnimcp.utils import image_to_base64
 from omnimcp.omniparser.server.deploy import Deploy
 
+
 class OmniParserClient:
     """Client for the OmniParser API."""
 
     def __init__(self, server_url: str = "http://localhost:8000"):
         """Initialize the OmniParser client.
-        
+
         Args:
             server_url: URL of the OmniParser server. Defaults to localhost.
         """
@@ -33,10 +35,10 @@ class OmniParserClient:
 
     def parse_image(self, image: Image.Image) -> Dict[str, Any]:
         """Parse an image using the OmniParser service.
-        
+
         Args:
             image: PIL Image to parse
-            
+
         Returns:
             Dict containing parsed UI elements and metadata
         """
@@ -51,7 +53,7 @@ class OmniParserClient:
             response = requests.post(
                 f"{self.server_url}/parse/",
                 json={"base64_image": base64_image},
-                timeout=30
+                timeout=30,
             )
             response.raise_for_status()
 
@@ -66,10 +68,10 @@ class OmniParserClient:
 
     def parse_screenshot(self, image_data: bytes) -> Dict[str, Any]:
         """Parse a screenshot using OmniParser.
-        
+
         Args:
             image_data: Raw image data in bytes
-            
+
         Returns:
             Dict containing parsed UI elements
         """
