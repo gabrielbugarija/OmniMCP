@@ -15,6 +15,9 @@
 
 \begin{abstract}
 We present OmniMCP, a novel framework that enables large language models to develop comprehensive UI understanding through the synthesis of spatial and temporal features. The framework combines fine-grained UI segmentation with process graphs derived from human demonstrations to construct rich contextual representations of interface states and interaction patterns. Our approach introduces a self-generating semantic layer that bridges the gap between raw UI elements and task-specific interaction strategies. Through advanced prompt templates and synthetic validation techniques, we demonstrate robust understanding across diverse interface patterns.
+
+% Our experimental results show [X]\% improvement in task completion rates across [Y] different UI patterns compared to baseline approaches. The framework demonstrates particular effectiveness in [specific use case], achieving [metric] performance. Key technical innovations include [innovation 1] and [innovation 2].
+
 \end{abstract}
 
 \section{Introduction}
@@ -113,14 +116,60 @@ async def find_element(description: str) -> Optional[UIElement]:
     return semantic_element_search(state.elements, description)
 \end{lstlisting}
 
+\section{Evaluation}
+\subsection{Benchmark Results}
+\begin{table}[h]
+\caption{Performance Comparison}
+\begin{tabular}{|c|c|c|c|}
+\hline
+Metric & OmniMCP & Baseline 1 & Baseline 2 \\
+\hline
+Task Success Rate & & & \\
+Completion Time & & & \\
+Error Rate & & & \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsection{System Architecture}
+% TODO: Add figure
+\begin{figure}[h]
+\centering
+% \includegraphics[width=0.8\textwidth]{system_architecture.png}
+\caption{OmniMCP System Architecture}
+\label{fig:architecture}
+\end{figure}
+
+\subsection{Complex UI Interaction Examples}
+% TODO: Add example scenarios and results
+
+\subsection{Spatial-Temporal Synthesis Algorithm}
+%\begin{algorithm}
+%\caption{Spatial-Temporal Feature Synthesis}
+%\begin{algorithmic}
+% TODO: Add algorithm steps
+%\end{algorithmic}
+%\end{algorithm}
+
+\subsection{Process Graph Construction Example}
+\begin{lstlisting}[language=Python]
+def construct_process_graph(demonstrations: List[Demonstration]) -> ProcessGraph:
+    # TODO: Implement process graph construction
+    pass
+
+def handle_edge_cases(graph: ProcessGraph) -> ProcessGraph:
+    # TODO: Implement edge case handling
+    pass
+\end{lstlisting}
+
 \subsection{Performance Optimizations}
 Critical optimizations focus on maintaining reliable UI understanding:
 
 \begin{itemize}
-    \item \textbf{Smart State Management}: Keep normalized and absolute coordinates with element confidence scores
-    \item \textbf{Semantic Element Targeting}: Use natural language understanding for robust element identification
-    \item \textbf{Vision-Enhanced Verification}: Leverage Claude's visual capabilities to verify action outcomes
-    \item \textbf{Prompt Template System}: Optimize context generation through reusable, structured prompts
+    \item \textbf{Minimal State Updates}: Update visual state only when needed, using smart caching and incremental updates
+    \item \textbf{Efficient Element Targeting}: Optimize element search with early termination and result caching
+    \item \textbf{Action Verification}: Verify all UI interactions with robust success criteria
+    \item \textbf{Error Recovery}: Implement systematic error handling with rich context and recovery strategies
 \end{itemize}
 
 \section{Implementation}
@@ -140,43 +189,82 @@ async def click_element(
     """Click UI element matching description"""
 \end{lstlisting}
 
-\section{Testing}
-The framework includes comprehensive synthetic testing capabilities for systematic validation.
+\section{Model Context Protocol Implementation}
+The framework implements a focused set of MCP tools for UI understanding:
 
 \begin{lstlisting}[language=Python]
-def generate_test_ui():
+@mcp.tool()
+async def get_screen_state() -> ScreenState:
+    """Get current state of visible UI elements"""
+
+@mcp.tool()
+async def find_element(description: str) -> Optional[UIElement]:
+    """Find UI element matching description"""
+
+@mcp.tool()
+async def click_element(description: str) -> ClickResult:
+    """Click UI element matching description"""
+\end{lstlisting}
+
+This minimal but complete protocol enables:
+\begin{itemize}
+    \item Natural language interface
+    \item Stateful context management
+    \item Action verification
+    \item Rich error handling
+\end{itemize}
+
+\section{Error Handling and Recovery}
+The framework implements systematic error handling:
+
+\begin{lstlisting}[language=Python]
+@dataclass
+class ToolError:
+    message: str
+    visual_context: Optional[bytes]  # Screenshot
+    attempted_action: str
+    element_description: str
+    recovery_suggestions: List[str]
+\end{lstlisting}
+
+Key aspects include:
+\begin{itemize}
+    \item Rich error context
+    \item Visual state snapshots
+    \item Recovery strategies
+    \item Debug support
+\end{itemize}
+
+\section{Synthetic UI Testing Framework}
+We introduce a comprehensive synthetic testing framework that enables systematic validation without relying on real UIs:
+
+\begin{lstlisting}[language=Python]
+def generate_test_ui() -> Tuple[Image, List[Element]]:
     """Generate synthetic UI with known elements"""
     img = Image.new('RGB', (800, 600))
     elements = []
     # Draw UI elements with known positions
+    draw.rectangle([(100, 100), (200, 150)], fill='blue')
     elements.append({
         "type": "button",
         "content": "Submit",
-        "bounds": {"x": 100, "y": 100},
-        "confidence": 1.0
+        "bounds": {"x": 100, "y": 100}
     })
     return img, elements
-\end{lstlisting}
 
-\begin{lstlisting}[language=Python]
-def generate_action_test_pair(
-    action_type: str
-) -> Tuple[Image, Image, List[Element]]:
+def generate_action_test_pair() -> Tuple[Image, Image, List[Element]]:
     """Generate before/after UI pairs for testing"""
     before_img, elements = generate_test_ui()
-    after_img = simulate_action(
-        before_img, 
-        action_type
-    )
+    after_img = simulate_action(before_img)
     return before_img, after_img, elements
 \end{lstlisting}
 
-This enables validation of:
+This framework enables:
 \begin{itemize}
-    \item Element detection accuracy
-    \item Action verification
-    \item State transition logic
-    \item Error recovery mechanisms
+    \item Platform-independent testing
+    \item Deterministic validation
+    \item Systematic scenario coverage
+    \item CI/CD integration
 \end{itemize}
 
 The framework provides rich debugging context:
@@ -192,6 +280,45 @@ class DebugContext:
 \end{lstlisting}
 
 This enables systematic validation of the understanding synthesis process.
+
+\section{Implementation Guidelines}
+We provide structured guidelines for extending the framework:
+
+\begin{itemize}
+    \item \textbf{Core Principles}
+    \begin{itemize}
+        \item Visual state is always current
+        \item Every action verifies completion
+        \item Rich error context always available
+        \item Debug information accessible
+    \end{itemize}
+    
+    \item \textbf{Critical Functions}
+    \begin{itemize}
+        \item VisualState.update()
+        \item MCPServer.observe()
+        \item find\_element()
+        \item verify\_action()
+    \end{itemize}
+    
+    \item \textbf{Testing Requirements}
+    \begin{itemize}
+        \item Unit tests for core logic
+        \item Integration tests for flows
+        \item Visual verification
+        \item Performance benchmarks
+    \end{itemize}
+\end{itemize}
+
+\section{Configuration and Deployment}
+The framework supports flexible deployment through:
+
+\begin{itemize}
+    \item Environment-based configuration
+    \item Multiple parser deployment options
+    \item Debug and logging controls
+    \item Performance tuning parameters
+\end{itemize}
 
 \section{Limitations and Future Work}
 Current limitations include:
