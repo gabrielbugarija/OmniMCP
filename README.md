@@ -12,21 +12,35 @@ OmniMCP provides rich UI context and interaction capabilities to AI models throu
 
 ## Overview
 
-<img src="https://github.com/user-attachments/assets/9b2f0c8b-fadf-4170-8f57-1ac958febd39" width="400" alt="Visual Context Acquisition">
+<p align="center">
+    <img src="https://github.com/user-attachments/assets/9b2f0c8b-fadf-4170-8f57-1ac958febd39" width="400" alt="Spatial Feature Understanding">
+</p>
 
-**Visual Context Acquisition with OmniParser**: OmniMCP begins by establishing a deep understanding of user interface elements through OmniParser. This involves detailed visual parsing, segmenting the screen, and identifying the spatial relationships between all interactive and informational components. This creates the foundation for context-aware interaction by understanding the UI's structure.
+1. **Spatial Feature Understanding**: OmniMCP begins by developing a deep understanding of the user interface's visual layout. Leveraging [microsoft/OmniParser](https://github.com/microsoft/OmniParser), it performs detailed visual parsing, segmenting the screen and identifying all interactive and informational elements. This includes recognizing their types, content, spatial relationships, and attributes, creating a rich representation of the UI's static structure.
 
-<img src="https://github.com/user-attachments/assets/b8c076bf-0d46-4130-9e7f-7e34b978e1c9" width="400" alt="Temporal Interaction Mapping">
+<br>
 
-**Temporal Interaction Mapping**: To provide comprehensive context, OmniMCP goes beyond the static visual state by capturing the flow of user interactions. It records the sequence of actions and transitions within the UI and uses this to generate a Process Graph. This temporal understanding allows AI models to reason about workflows and plan based on interaction history.
+<p align="center">
+    <img src="https://github.com/user-attachments/assets/b8c076bf-0d46-4130-9e7f-7e34b978e1c9" width="400" alt="Temporal Feature Understanding">
+</p>
 
-<img src="https://github.com/user-attachments/assets/c5fa1d28-b79e-4269-9340-6f36e6746a12" width="400" alt="Contextual Analysis">
+2. **Temporal Feature Understanding**: To capture the dynamic aspects of the UI, OmniMCP tracks user interactions and the resulting state transitions. It records sequences of actions and changes within the UI, building a Process Graph that represents the flow of user workflows. This temporal understanding allows AI models to reason about interaction history and plan future actions based on context.
 
-**Contextual Analysis via LLM Orchestration**: Leveraging the Model Context Protocol (MCP), OmniMCP enables Large Language Models (LLMs) to intelligently analyze the rich visual and temporal context. The LLM synthesizes this information to make informed decisions about how to interact with the UI, choosing the most appropriate actions based on the current state and interaction history.
+<br>
 
-<img src="https://github.com/user-attachments/assets/9ec7feac-c1e9-4480-981b-93de98de193c" width="400" alt="Dynamic API Generation">
+<p align="center">
+    <img src="https://github.com/user-attachments/assets/c5fa1d28-b79e-4269-9340-6f36e6746a12" width="400" alt="Internal API Generation">
+</p>
 
-**Dynamic API Generation through Prompted MCP**: Ultimately, OmniMCP provides a seemingly simple yet incredibly powerful interface for interaction. By leveraging In-Context Learning (prompting), the underlying Large Language Model generates a dynamic and context-specific API that accurately reflects the understood spatiotemporal features of the UI. This generated API is then seamlessly exposed and accessed through the fixed Model Context Protocol (MCP). This allows both humans (through natural language that the LLM translates) and AI models to perform a full range of UI operations with verification, using a consistent and straightforward MCP interface that is powered by the model's dynamically created understanding.
+3. **Internal API Generation**: Utilizing the rich spatial and temporal context it has acquired, OmniMCP leverages a Large Language Model (LLM) to generate an internal, context-specific API. Through In-Context Learning (prompting), the LLM dynamically creates a set of functions and parameters that accurately reflect the understood spatiotemporal features of the UI. This internal API is tailored to the current state and interaction history, enabling precise and context-aware interactions.
+
+<br>
+
+<p align="center">
+    <img src="https://github.com/user-attachments/assets/9ec7feac-c1e9-4480-981b-93de98de193c" width="400" alt="External API Publication (MCP)">
+</p>
+
+4. **External API Publication (MCP)**: Finally, OmniMCP exposes this dynamically generated internal API through the [Model Context Protocol (MCP)](https://github.com/modelcontextprotocol). This provides a consistent and straightforward interface for both humans (via natural language translated by the LLM) and AI models to interact with the UI. Through this MCP interface, a full range of UI operations can be performed with verification, all powered by the AI model's deep, dynamically created understanding of the UI's spatiotemporal context.
 
 ## Installation
 
