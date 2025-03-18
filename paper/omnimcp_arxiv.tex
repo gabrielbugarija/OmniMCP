@@ -220,162 +220,6 @@ Error Rate & & & \\
 \end{tabular}
 \end{table}
 
-\section{Reinforcement Learning for Superhuman UI Automation}
-
-We enhance OmniMCP with LLM-guided reinforcement learning to achieve superhuman performance in UI automation tasks. This section outlines our approach for integrating RL with the existing spatial-temporal synthesis framework.
-
-\subsection{Framework Overview}
-
-\begin{figure}[h]
-\centering
-\begin{tabular}{ccc}
-& \fbox{\parbox{4cm}{\centering LLM Policy Controller}} & \\
-\\
-\fbox{\parbox{3cm}{\centering Process Graph Memory}} & & \fbox{\parbox{3cm}{\centering Synthetic UI Generator}} \\
-\\
-& \fbox{\parbox{4cm}{\centering OmniMCP Core}} & \\
-\\
-& \fbox{\parbox{4cm}{\centering UI Environment}} & \\
-\end{tabular}
-\caption{RL-Enhanced OmniMCP Architecture (simplified)}
-\label{fig:rl-architecture}
-\end{figure}
-
-
-\subsection{LLM-Guided Policy Optimization}
-
-We formulate UI automation as a Markov Decision Process (MDP) where:
-\begin{itemize}
-    \item States are ScreenState objects capturing UI elements and relationships
-    \item Actions correspond to MCP tool operations
-    \item Transitions model UI state changes after interactions
-    \item Rewards quantify interaction effectiveness
-\end{itemize}
-
-Rather than traditional RL algorithms, we employ Direct Preference Optimization (DPO) using the LLM to generate and evaluate interaction preferences. This approach eliminates the need for extensive online interaction, focusing instead on learning from comparative judgments of action quality.
-
-\subsection{Synthetic Data Generation}
-
-\begin{figure}[h]
-\centering
-\begin{tikzpicture}[node distance=1.5cm, auto, thick]
-    % Nodes
-    \node[draw, rectangle, minimum width=3cm, minimum height=0.8cm] (base) {Base UI State};
-    \node[draw, rectangle, minimum width=3cm, minimum height=0.8cm, right=of base] (gen) {LLM Variation Generator};
-    \node[draw, rectangle, minimum width=3cm, minimum height=0.8cm, below=of gen] (render) {Synthetic UI Renderer};
-    \node[draw, rectangle, minimum width=3cm, minimum height=0.8cm, left=of render] (lib) {Element Library};
-    \node[draw, rectangle, minimum width=3cm, minimum height=0.8cm, below=of render] (env) {Training Environment};
-    
-    % Connections
-    \draw[->] (base) -- (gen);
-    \draw[->] (gen) -- (render);
-    \draw[<-] (render) -- (lib);
-    \draw[->] (render) -- (env);
-\end{tikzpicture}
-\caption{Synthetic UI Generation Pipeline}
-\label{fig:synthetic-ui}
-\end{figure}
-
-We generate synthetic UI variations to create a safe exploration space, enabling the policy to learn from diverse scenarios without risking execution of harmful actions. The LLM generates plausible UI state variations, including different layouts, alternative styles, edge cases, and interaction patterns. This approach allows for:
-
-\begin{enumerate}
-    \item Systematic coverage of UI patterns
-    \item Safe exploration without operational risks
-    \item Accelerated learning through parallel simulation
-    \item Generation of rare but critical edge cases
-\end{enumerate}
-
-\subsection{Process Graph-Augmented Memory}
-
-\begin{figure}[h]
-\centering
-\begin{tikzpicture}[node distance=1.5cm, auto, thick]
-    % Nodes
-    \node[draw, rectangle, minimum width=3cm, minimum height=0.8cm] (traj) {UI Interaction Trajectory};
-    \node[draw, rectangle, minimum width=3cm, minimum height=0.8cm, right=of traj] (embed) {State Embedding Generator};
-    \node[draw, rectangle, minimum width=3cm, minimum height=0.8cm, right=of embed] (update) {Graph Update Logic};
-    \node[draw, rectangle, minimum width=3cm, minimum height=0.8cm, below=of update] (graph) {Process Graph Repository};
-    \node[draw, rectangle, minimum width=3cm, minimum height=0.8cm, left=of graph] (match) {Similarity Matcher};
-    \node[draw, rectangle, minimum width=3cm, minimum height=0.8cm, left=of match] (current) {Current UI State};
-    \node[draw, rectangle, minimum width=3cm, minimum height=0.8cm, below=of match] (action) {Action Selection Guidance};
-    
-    % Connections
-    \draw[->] (traj) -- (embed);
-    \draw[->] (embed) -- (update);
-    \draw[->] (update) -- (graph);
-    \draw[->] (graph) -- (match);
-    \draw[->] (current) -- (match);
-    \draw[->] (match) -- (action);
-\end{tikzpicture}
-\caption{Process Graph Memory System}
-\label{fig:process-graph}
-\end{figure}
-
-We extend beyond the Markovian assumption through a process graph-augmented memory that captures long-term patterns in successful UI interactions. This structure:
-
-\begin{enumerate}
-    \item Stores embeddings of key states from successful trajectories
-    \item Connects them in a weighted directed graph based on transition patterns
-    \item Retrieves similar interaction patterns when encountering familiar UI states
-    \item Provides structured guidance to the LLM policy controller
-\end{enumerate}
-
-\subsection{LLM as Reward Function}
-
-We employ the LLM itself as a contextualized reward function through structured evaluation prompts. The LLM evaluates action quality considering:
-
-\begin{enumerate}
-    \item Progress toward the goal
-    \item Interaction efficiency
-    \item Robustness to UI variations
-    \item Safety and adherence to best practices
-\end{enumerate}
-
-This approach provides rich, context-aware rewards that capture nuanced aspects of UI interaction quality while generalizing across diverse interface patterns.
-
-\subsection{Forecasting-Enhanced Exploration}
-
-\begin{figure}[h]
-\centering
-\begin{tikzpicture}[node distance=1.5cm, auto, thick]
-    % Nodes
-    \node[draw, rectangle, minimum width=3cm, minimum height=0.8cm] (current) {Current State};
-    \node[draw, rectangle, minimum width=3cm, minimum height=0.8cm, right=of current] (gen) {Action Sequence Generator};
-    \node[draw, rectangle, minimum width=3cm, minimum height=0.8cm, below=of gen] (forecast) {LLM State Forecaster};
-    \node[draw, rectangle, minimum width=3cm, minimum height=0.8cm, below=of forecast] (eval) {Future State Evaluator};
-    \node[draw, rectangle, minimum width=3cm, minimum height=0.8cm, left=of eval] (reward) {Reward Estimation};
-    
-    % Connections
-    \draw[->] (current) -- (gen);
-    \draw[->] (gen) -- (forecast);
-    \draw[->] (forecast) -- (eval);
-    \draw[->] (eval) -- (reward);
-\end{tikzpicture}
-\caption{Forecasting-Enhanced Exploration}
-\label{fig:forecasting}
-\end{figure}
-
-We introduce forecasting to predict future UI states resulting from potential action sequences. This enables:
-
-\begin{enumerate}
-    \item Mental simulation of multi-step interactions without execution
-    \item More efficient exploration of the action space
-    \item Planning capabilities for complex UI workflows
-    \item Early detection of potential errors or dead ends
-\end{enumerate}
-
-\subsection{Training Pipeline}
-
-Our training pipeline consists of three phases:
-
-\begin{enumerate}
-    \item \textbf{Initialization}: Bootstrap policy from process graphs derived from human demonstrations
-    \item \textbf{Synthetic Training}: Refine policy through interaction with synthetic UI variations
-    \item \textbf{Online Fine-tuning}: Final refinement with limited real application interaction
-\end{enumerate}
-
-This approach enables OmniMCP to develop superhuman automation capabilities while maintaining the interpretability and safety guarantees of the original framework.
-
 \subsection{System Architecture}
 % TODO: Add figure
 \begin{figure}[h]
@@ -614,6 +458,26 @@ Key components of this future enhancement would include:
 \end{enumerate}
 
 The training pipeline would consist of initialization from process graphs, refinement through synthetic UI interactions, and final tuning with limited real application interaction. This approach would enable OmniMCP to develop superhuman automation capabilities while maintaining interpretability and safety guarantees.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[node distance=1.5cm, auto, thick]
+    % Nodes
+    \node[draw, rectangle, minimum width=3cm, minimum height=0.8cm] (current) {Current State};
+    \node[draw, rectangle, minimum width=3cm, minimum height=0.8cm, right=of current] (gen) {Action Sequence Generator};
+    \node[draw, rectangle, minimum width=3cm, minimum height=0.8cm, below=of gen] (forecast) {LLM State Forecaster};
+    \node[draw, rectangle, minimum width=3cm, minimum height=0.8cm, below=of forecast] (eval) {Future State Evaluator};
+    \node[draw, rectangle, minimum width=3cm, minimum height=0.8cm, left=of eval] (reward) {Reward Estimation};
+    
+    % Connections
+    \draw[->] (current) -- (gen);
+    \draw[->] (gen) -- (forecast);
+    \draw[->] (forecast) -- (eval);
+    \draw[->] (eval) -- (reward);
+\end{tikzpicture}
+\caption{Forecasting-Enhanced Exploration}
+\label{fig:forecasting}
+\end{figure}
 
 \subsection{Additional Research Directions}
 
