@@ -18,7 +18,11 @@
 \maketitle
 
 \begin{abstract}
-We present OmniMCP, a novel framework that enables large language models to develop comprehensive UI understanding through the synthesis of spatial and temporal features. The framework combines fine-grained UI segmentation with process graphs derived from human demonstrations to construct rich contextual representations of interface states and interaction patterns. Our approach introduces a self-generating comprehension engine that bridges the gap between raw UI elements and task-specific interaction strategies. Through advanced prompt templates and synthetic validation techniques, we demonstrate robust understanding across diverse interface patterns. Our experimental results show A\% improvement in task completion rates across B different UI patterns compared to baseline approaches. The framework demonstrates particular effectiveness in cross-application workflows, achieving C\% success rate compared to D\% for visual parsing alone. Key technical innovations include process graph representations for temporal context and spatial-temporal feature synthesis through a standardized MCP protocol implementation. Our framework not only addresses current UI automation challenges but also lays the foundation for future work integrating reinforcement learning approaches, where the spatial-temporal representations can serve as a structured state space for learning optimal interaction policies through synthetic environments and LLM-guided reward functions.
+We present OmniMCP, a novel framework that enables large language models to develop comprehensive UI understanding through the synthesis of spatial and temporal features. The framework combines fine-grained UI segmentation with process graphs derived from human demonstrations to construct rich contextual representations of interface states and interaction patterns. Our approach introduces a self-generating comprehension engine that bridges the gap between raw UI elements and task-specific interaction strategies. Through in-context learning and synthetic validation techniques, we demonstrate robust understanding across diverse interface patterns.
+
+Our experimental results show A\% improvement in task completion rates across B different UI patterns compared to baseline approaches. The framework demonstrates particular effectiveness in cross-application workflows, achieving C\% success rate compared to D\% for visual parsing alone. Key technical innovations include process graph representations for temporal context and spatial-temporal feature synthesis through a standardized MCP protocol implementation.
+
+Our framework not only addresses current UI automation challenges but also lays the foundation for future work integrating reinforcement learning approaches, where the spatial-temporal representations can serve as a structured state space for learning optimal interaction policies through synthetic environments and LLM-guided reward functions.
 
 % Our experimental results show [X]\% improvement in task completion rates across [Y] different UI patterns compared to baseline approaches. The framework demonstrates particular effectiveness in [specific use case], achieving [metric] performance. Key technical innovations include [innovation 1] and [innovation 2].
 
@@ -488,47 +492,180 @@ Critical optimizations focus on maintaining reliable UI understanding:
     \item \textbf{Error Recovery}: Implement systematic error handling with rich context and recovery strategies
 \end{itemize}
 
-\section{Implementation}
-The framework exposes a clean API for model interaction:
+\section{MCP Implementation and Framework API}
+
+OmniMCP exposes a clean API for model interaction while implementing the Model Context Protocol (MCP) to provide standardized interfaces for UI understanding and automation:
 
 \begin{lstlisting}[language=Python]
-async def describe_element(description: str) -> str:
-    """Get rich description of UI element"""
+async def describe_current_state() -> str:
+    """Get rich description of current UI state"""
 
 async def find_elements(query: str) -> List[UIElement]:
     """Find elements matching natural query"""
 
-async def click_element(
+async def take_action(
     description: str,
-    click_type: str = "single"
-) -> InteractionResult:
-    """Click UI element matching description"""
+    image_context: Optional[bytes] = None
+) -> ActionResult:
+    """Execute action described in natural language with optional visual context"""
 \end{lstlisting}
 
-\section{Model Context Protocol Implementation}
-The framework implements a focused set of MCP tools for UI understanding:
+The framework implements a comprehensive set of MCP tools designed specifically for robust UI understanding and automation:
 
 \begin{lstlisting}[language=Python]
 @mcp.tool()
 async def get_screen_state() -> ScreenState:
     """Get current state of visible UI elements"""
+    state = await visual_state.capture()
+    return state
 
 @mcp.tool()
 async def find_element(description: str) -> Optional[UIElement]:
-    """Find UI element matching description"""
+    """Find UI element matching natural language description"""
+    state = await get_screen_state()
+    return semantic_element_search(state.elements, description)
 
 @mcp.tool()
-async def click_element(description: str) -> ClickResult:
-    """Click UI element matching description"""
+async def take_action(description: str, image_context: Optional[bytes] = None) -> ActionResult:
+    """Execute action described in natural language with optional visual context
+    
+    Examples:
+      - "Click the Submit button in the bottom right"
+      - "Type 'Hello world' in the search box"
+      - "Drag the file icon to the folder labeled 'Documents'"
+      - "Select 'Option 2' from the dropdown menu"
+      - "Right-click on the image and select 'Save as'"
+    """
+    # Parse the natural language description into structured action
+    action = await action_parser.parse(description, image_context)
+    
+    # Execute the appropriate action based on type
+    if action.type == "click":
+        element = await find_element(action.target)
+        if not element:
+            return ActionResult(success=False, error=f"Element not found: {action.target}")
+        return await input_controller.click(element, action.parameters.get("click_type", "single"))
+    
+    elif action.type == "type":
+        element = await find_element(action.target)
+        if not element:
+            return ActionResult(success=False, error=f"Element not found: {action.target}")
+        return await input_controller.type_text(element, action.parameters.get("text", ""))
+    
+    elif action.type == "drag":
+        source = await find_element(action.source)
+        target = await find_element(action.target)
+        if not source or not target:
+            return ActionResult(success=False, error="Source or target element not found")
+        return await input_controller.drag(source, target)
+    
+    # Additional action types handled similarly
+    else:
+        return ActionResult(success=False, error=f"Unsupported action type: {action.type}")
+
+@mcp.tool()
+async def wait_for_state_change(
+    description: str = "any change", 
+    timeout: float = 10.0
+) -> WaitResult:
+    """Wait for UI state to change according to description within timeout
+    
+    Examples:
+      - "Wait for the loading spinner to disappear"
+      - "Wait for a confirmation message to appear"
+      - "Wait for the page to finish loading"
+    """
+    start_time = time.time()
+    initial_state = await get_screen_state()
+    
+    while time.time() - start_time < timeout:
+        current_state = await get_screen_state()
+        match = await state_matcher.matches_description(current_state, description, initial_state)
+        if match:
+            return WaitResult(success=True, state=current_state, match_details=match)
+        await asyncio.sleep(0.5)
+    
+    return WaitResult(success=False, error=f"Timeout waiting for: {description}")
+
+@mcp.tool()
+async def get_interaction_history() -> List[Interaction]:
+    """Get recent interaction history"""
+    return await process_graph.recent_interactions()
+
+@mcp.tool()
+async def predict_next_actions(current_state: Optional[ScreenState] = None) -> List[ActionPrediction]:
+    """Predict possible next actions based on process graph and current state"""
+    if current_state is None:
+        current_state = await get_screen_state()
+    return await process_graph.suggest_next_actions(current_state)
+
+@mcp.tool()
+async def verify_action_result(action: str, expected_result: str) -> VerificationResult:
+    """Verify that an action produced the expected result"""
+    current_state = await get_screen_state()
+    return await verification_engine.verify(action, expected_result, current_state)
+
+@mcp.tool()
+async def handle_error(error: ToolError) -> ErrorResolution:
+    """Handle error with appropriate recovery strategy"""
+    return await error_handler.resolve(error)
 \end{lstlisting}
 
-This minimal but complete protocol enables:
+This comprehensive protocol enables:
 \begin{itemize}
-    \item Natural language interface
-    \item Stateful context management
-    \item Action verification
-    \item Rich error handling
+    \item Natural language interface for both action description and UI understanding
+    \item Support for diverse interaction types through a unified interface
+    \item Contextual action parsing that incorporates visual information when needed
+    \item Stateful context management across complex UI workflows
+    \item Robust action verification and error recovery
+    \item Temporal pattern recognition through process graphs
+    \item Predictive action suggestions based on learned interaction patterns
 \end{itemize}
+
+The protocol design follows key principles of reliability and context preservation, ensuring that each action is properly verified and that rich contextual information is maintained throughout interaction sequences.
+
+Developers integrating with OmniMCP can follow these example patterns:
+
+\begin{lstlisting}[language=Python]
+# Integration example: Adding custom action handler
+@action_handler("specialized_interaction")
+async def handle_specialized_interaction(action_description, context):
+    """Handle domain-specific interaction pattern"""
+    # Custom implementation for specialized interactions
+    return ActionResult(success=True, details="Specialized interaction completed")
+
+# Integration example: Custom verification for domain-specific actions
+@verification_handler("login_action")
+async def verify_login_success(action_result, screen_state):
+    """Verify login was successful"""
+    success_indicators = [
+        await find_element("Welcome message"),
+        await find_element("User avatar"),
+        not await find_element("Login error")
+    ]
+    return all(success_indicators)
+
+# Using the framework in application code
+async def automate_workflow(task_description):
+    client = OmniMCPClient()
+    await client.connect()
+    
+    # Initialize the process graph from demonstrations
+    demos = await load_demonstrations("email_processing")
+    process_graph = await client.construct_process_graph(demos)
+    
+    # Execute the workflow with contextual understanding
+    result = await client.execute_workflow(
+        task_description, 
+        process_graph=process_graph,
+        max_attempts=3,
+        verification_level="strict"
+    )
+    
+    return result
+\end{lstlisting}
+
+This integration pattern ensures separation of concerns while maintaining the core principles of OmniMCP, particularly the verification of actions and rich error context. The framework's implementation emphasizes reliability through consistent state management, thorough verification of actions, and comprehensive error handling with recovery strategies.
 
 \section{Error Handling and Recovery}
 The framework implements systematic error handling:
@@ -804,7 +941,66 @@ The training pipeline would consist of initialization from process graphs, refin
 \subsection{Additional Research Directions}
 
 Beyond reinforcement learning integration, we plan to explore:
+
 \begin{itemize}
+    \item \textbf{Fine-tuning Specialized Models}: While our current approach relies on in-context learning through prompt engineering, fine-tuning specialized models on UI automation tasks represents a promising direction. By training models on extensive datasets of UI interactions, we can potentially create more efficient specialists that require fewer tokens to understand context and generate appropriate actions. This approach could significantly reduce latency and improve cost-effectiveness for deployment scenarios with well-defined UI patterns.
+    
+    \item \textbf{Process Graph Embeddings with RAG}: Our process graph approach can be further enhanced through Retrieval Augmented Generation (RAG) techniques. By embedding generated process graph descriptions and interaction sequences into dense vector representations, we can create a searchable knowledge base of UI patterns and successful interaction strategies. This would enable:
+    
+    \begin{enumerate}
+        \item \textbf{Efficient Retrieval}: When encountering a new UI state, the system could efficiently query similar past experiences through vector similarity
+        \item \textbf{Cross-Application Pattern Transfer}: Identifying common interaction patterns across different applications with similar functions
+        \item \textbf{Context-Aware Recommendations}: Retrieving relevant interaction sequences based on both visual state and task description
+        \item \textbf{Explainable Decisions}: Providing clear attribution to previous successful interactions that inform current decisions
+    \end{enumerate}
+    
+    The implementation would involve:
+    
+    \begin{lstlisting}[language=Python]
+    class ProcessGraphRAG:
+        def __init__(self, embedding_model):
+            self.embedding_model = embedding_model
+            self.vector_store = VectorDatabase()
+            
+        async def index_process_graph(self, graph, description):
+            """Index process graph with description for retrieval"""
+            embedding = self.embedding_model.embed(
+                description + "\n" + graph.to_text()
+            )
+            self.vector_store.add(
+                embedding, 
+                metadata={"graph_id": graph.id, "description": description}
+            )
+            
+        async def retrieve_similar_graphs(self, current_state, task):
+            """Retrieve relevant process graphs for current context"""
+            query = f"Task: {task}\nUI State: {current_state.summarize()}"
+            query_embedding = self.embedding_model.embed(query)
+            
+            matches = self.vector_store.search(
+                query_embedding,
+                k=5,
+                threshold=0.75
+            )
+            
+            return [self.load_graph(match.metadata["graph_id"]) 
+                    for match in matches]
+                    
+        async def augment_context(self, llm_context, current_state, task):
+            """Augment LLM context with relevant process graphs"""
+            similar_graphs = await self.retrieve_similar_graphs(
+                current_state, task
+            )
+            
+            augmented_context = llm_context + "\n\nRelevant interaction patterns:\n"
+            for graph in similar_graphs:
+                augmented_context += f"- {graph.summarize()}\n"
+                
+            return augmented_context
+    \end{lstlisting}
+    
+    This RAG-enhanced approach would maintain the flexibility of our current system while leveraging past experiences to improve efficiency and success rates across diverse UI environments.
+    
     \item Development of comprehensive evaluation metrics
     \item Enhanced cross-platform generalization
     \item Integration with broader LLM architectures

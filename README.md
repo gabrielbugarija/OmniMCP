@@ -113,50 +113,24 @@ class InteractionResult:
     context: Dict[str, Any] = field(default_factory=dict)
 ```
 
-## MCP Tools
+## MCP Implementation and Framework API
 
-OmniMCP provides a rich set of tools for UI understanding and interaction:
+OmniMCP provides a powerful yet intuitive API for model interaction through the Model Context Protocol (MCP). This standardized interface enables seamless integration between large language models and UI automation capabilities.
 
-### Visual Understanding
+### Core API
+
 ```python
-@tool()
-async def get_screen_state() -> ScreenState:
-    """Get current state of visible UI elements"""
+async def describe_current_state() -> str:
+    """Get rich description of current UI state"""
 
-@tool()
-async def describe_element(description: str) -> str:
-    """Get rich description of UI element"""
-
-@tool()
-async def find_elements(
-    query: str,
-    max_results: int = 5
-) -> List[UIElement]:
+async def find_elements(query: str) -> List[UIElement]:
     """Find elements matching natural query"""
-```
 
-### UI Interaction
-```python
-@tool()
-async def click_element(
+async def take_action(
     description: str,
-    click_type: Literal["single", "double", "right"] = "single"
-) -> InteractionResult:
-    """Click UI element matching description"""
-
-@tool()
-async def scroll_view(
-    direction: Literal["up", "down", "left", "right"],
-    amount: float
-) -> ScrollResult:
-    """Scroll in specified direction"""
-
-@tool()
-async def type_text(
-    text: str,
-    target: Optional[str] = None
-) -> TypeResult:
-    """Type text, optionally targeting element"""
+    image_context: Optional[bytes] = None
+) -> ActionResult:
+    """Execute action described in natural language with optional visual context"""
 ```
 
 ## Architecture
@@ -253,6 +227,23 @@ OMNIMCP_LOG_LEVEL=DEBUG    # Log level
    - Region-based updates
    - Parser optimization
    - Result caching
+
+## Limitations and Future Work
+
+Current limitations include:
+- Need for more extensive validation across UI patterns
+- Optimization of pattern recognition in process graphs
+- Refinement of spatial-temporal feature synthesis
+
+### Future Research Directions
+
+Beyond reinforcement learning integration, we plan to explore:
+- **Fine-tuning Specialized Models**: Training domain-specific models on UI automation tasks to improve efficiency and reduce token usage
+- **Process Graph Embeddings with RAG**: Embedding generated process graph descriptions and retrieving relevant interaction patterns via Retrieval Augmented Generation
+- Development of comprehensive evaluation metrics
+- Enhanced cross-platform generalization
+- Integration with broader LLM architectures
+- Collaborative multi-agent UI automation frameworks
 
 ## Contributing
 
