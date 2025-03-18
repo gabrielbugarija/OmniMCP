@@ -1,6 +1,6 @@
 # OmniMCP
 
-OmniMCP provides rich UI context and interaction capabilities to AI models through the Model Context Protocol (MCP). It focuses on enabling deep understanding of user interfaces through visual analysis, structured responses, and precise interaction.
+OmniMCP provides rich UI context and interaction capabilities to AI models through [Model Context Protocol (MCP)](https://github.com/modelcontextprotocol) and [microsoft/OmniParser](https://github.com/microsoft/OmniParser). It focuses on enabling deep understanding of user interfaces through visual analysis, structured responses, and precise interaction.
 
 ## Core Features
 
