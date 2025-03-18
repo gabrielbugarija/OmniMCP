@@ -16,7 +16,7 @@ fi
 
 # Install OmniMCP
 echo "Installing OmniMCP with minimal dependencies..."
-uv pip install -e .
+uv pip install -e ".[test]"  # Install with test dependencies
 
 echo ""
 echo "OmniMCP installed successfully!"
@@ -34,5 +34,7 @@ echo "  python -m run_omnimcp server # For MCP server mode"
 echo "  python -m run_omnimcp debug  # For debug mode"
 echo ""
 echo "To run tests:"
+echo "  pytest tests/                # Run all tests"
+echo "  pytest tests/ -v             # Run tests with verbose output"
 echo "  python tests/test_synthetic_ui.py  # Generate test UI images"
 echo ""

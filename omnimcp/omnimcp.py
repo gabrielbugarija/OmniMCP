@@ -15,8 +15,8 @@ from mcp.server.fastmcp import FastMCP
 from PIL import Image
 from loguru import logger
 
-from .omniparser.client import OmniParserProvider
-from .utils import (
+from omnimcp.omniparser.client import OmniParserProvider
+from omnimcp.utils import (
     take_screenshot,
     normalize_coordinates,
     denormalize_coordinates,
@@ -25,7 +25,7 @@ from .utils import (
     MouseController,
     KeyboardController,
 )
-from .types import (
+from omnimcp.types import (
     Bounds,
     UIElement,
     ScreenState,

@@ -10,7 +10,7 @@ import boto3
 import fire
 import paramiko
 
-from ..config import config
+from omnimcp.config import config
 
 CLEANUP_ON_FAILURE = False
 

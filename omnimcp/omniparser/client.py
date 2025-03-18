@@ -1,128 +1,170 @@
 """Client module for interacting with the OmniParser server."""
 
 import base64
-import fire
-import requests
+import os
+import time
+from typing import Optional, Dict, List
 
+import requests
 from loguru import logger
 from PIL import Image, ImageDraw
 
-
-def image_to_base64(image_path: str) -> str:
-    """Convert an image file to base64 string.
-
-    Args:
-        image_path: Path to the image file
-
-    Returns:
-        str: Base64 encoded string of the image
-    """
-    with open(image_path, "rb") as image_file:
-        return base64.b64encode(image_file.read()).decode("utf-8")
+from server import Deploy
 
 
-def plot_results(
-    original_image_path: str,
-    som_image_base64: str,
-    parsed_content_list: list[dict[str, list[float]]],
-) -> None:
-    """Plot parsing results on the original image.
+class OmniParserClient:
+    """Client for interacting with the OmniParser server."""
 
-    Args:
-        original_image_path: Path to the original image
-        som_image_base64: Base64 encoded SOM image
-        parsed_content_list: List of parsed content with bounding boxes
-    """
-    # Open original image
-    image = Image.open(original_image_path)
-    width, height = image.size
+    def __init__(self, server_url: Optional[str] = None, auto_deploy: bool = True):
+        """Initialize the OmniParser client.
 
-    # Create drawable image
-    draw = ImageDraw.Draw(image)
+        Args:
+            server_url: URL of the OmniParser server. If None, will attempt to find
+                or deploy a server.
+            auto_deploy: Whether to automatically deploy a server if none is found.
+        """
+        self.server_url = server_url
+        self.auto_deploy = auto_deploy
+        self._ensure_server()
 
-    # Draw bounding boxes and labels
-    for item in parsed_content_list:
-        # Get normalized coordinates and convert to pixel coordinates
-        x1, y1, x2, y2 = item["bbox"]
-        x1 = int(x1 * width)
-        y1 = int(y1 * height)
-        x2 = int(x2 * width)
-        y2 = int(y2 * height)
+    def _ensure_server(self) -> None:
+        """Ensure a server is available, deploying one if necessary."""
+        if not self.server_url:
+            # Try to find an existing server
+            deployer = Deploy()
+            deployer.status()  # This will log any running instances
 
-        label = item["content"]
+            # Check if any instances are running
+            import boto3
+            ec2 = boto3.resource('ec2')
+            instances = ec2.instances.filter(
+                Filters=[
+                    {'Name': 'tag:Name', 'Values': ['omniparser']},
+                    {'Name': 'instance-state-name', 'Values': ['running']}
+                ]
+            )
+            
+            instance = next(iter(instances), None)
+            if instance and instance.public_ip_address:
+                self.server_url = f"http://{instance.public_ip_address}:8000"
+                logger.info(f"Found existing server at {self.server_url}")
+            elif self.auto_deploy:
+                logger.info("No server found, deploying new instance...")
+                deployer.start()
+                # Wait for deployment and get URL
+                max_retries = 30
+                retry_delay = 10
+                for i in range(max_retries):
+                    instances = ec2.instances.filter(
+                        Filters=[
+                            {'Name': 'tag:Name', 'Values': ['omniparser']},
+                            {'Name': 'instance-state-name', 'Values': ['running']}
+                        ]
+                    )
+                    instance = next(iter(instances), None)
+                    if instance and instance.public_ip_address:
+                        self.server_url = f"http://{instance.public_ip_address}:8000"
+                        break
+                    time.sleep(retry_delay)
+                else:
+                    raise RuntimeError("Failed to deploy server")
+            else:
+                raise RuntimeError(
+                    "No server URL provided and auto_deploy is disabled"
+                )
 
-        # Draw rectangle
-        draw.rectangle([(x1, y1), (x2, y2)], outline="red", width=2)
+        # Verify server is responsive
+        self._check_server()
 
-        # Draw label background
-        text_bbox = draw.textbbox((x1, y1), label)
-        draw.rectangle(
-            [text_bbox[0] - 2, text_bbox[1] - 2, text_bbox[2] + 2, text_bbox[3] + 2],
-            fill="white",
-        )
+    def _check_server(self) -> None:
+        """Check if the server is responsive."""
+        try:
+            response = requests.get(f"{self.server_url}/probe/", timeout=10)
+            response.raise_for_status()
+        except Exception as e:
+            raise RuntimeError(f"Server not responsive: {e}")
 
-        # Draw label text
-        draw.text((x1, y1), label, fill="red")
+    def parse_image(self, image: Image.Image) -> Dict:
+        """Parse an image using the OmniParser server.
 
-    # Show image
-    image.show()
+        Args:
+            image: PIL Image to parse
+
+        Returns:
+            Dict containing parsing results
+        """
+        # Convert image to base64
+        image_bytes = self._image_to_base64(image)
+
+        # Make request
+        try:
+            response = requests.post(
+                f"{self.server_url}/parse/",
+                json={"base64_image": image_bytes},
+                timeout=30
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            return {"error": f"Failed to parse image: {e}"}
+
+    @staticmethod
+    def _image_to_base64(image: Image.Image) -> str:
+        """Convert PIL Image to base64 string."""
+        import io
+        buffered = io.BytesIO()
+        image.save(buffered, format="PNG")
+        return base64.b64encode(buffered.getvalue()).decode()
+
+    def visualize_results(
+        self,
+        image: Image.Image,
+        parsed_content: List[Dict]
+    ) -> Image.Image:
+        """Visualize parsing results on the image.
+
+        Args:
+            image: Original PIL Image
+            parsed_content: List of parsed content with bounding boxes
+
+        Returns:
+            PIL Image with visualizations
+        """
+        # Create copy of image
+        viz_image = image.copy()
+        draw = ImageDraw.Draw(viz_image)
+
+        # Draw results
+        for item in parsed_content:
+            # Get coordinates
+            x1, y1, x2, y2 = item["bbox"]
+            x1 = int(x1 * image.width)
+            y1 = int(y1 * image.height)
+            x2 = int(x2 * image.width)
+            y2 = int(y2 * image.height)
+
+            # Draw box
+            draw.rectangle([(x1, y1), (x2, y2)], outline="red", width=2)
+
+            # Draw label
+            label = item["content"]
+            bbox = draw.textbbox((x1, y1), label)
+            draw.rectangle(bbox, fill="white")
+            draw.text((x1, y1), label, fill="red")
+
+        return viz_image
 
 
-def parse_image(
-    image_path: str,
-    server_url: str,
-) -> None:
-    """Parse an image using the OmniParser server.
-
-    Args:
-        image_path: Path to the image file
-        server_url: URL of the OmniParser server
-    """
-    # Remove trailing slash from server_url if present
-    server_url = server_url.rstrip("/")
-
-    # Convert image to base64
-    base64_image = image_to_base64(image_path)
-
-    # Prepare request
-    url = f"{server_url}/parse/"
-    payload = {"base64_image": base64_image}
-
-    try:
-        # First, check if the server is available
-        probe_url = f"{server_url}/probe/"
-        probe_response = requests.get(probe_url)
-        probe_response.raise_for_status()
-        logger.info("Server is available")
-
-        # Make request to API
-        response = requests.post(url, json=payload)
-        response.raise_for_status()
-
-        # Parse response
-        result = response.json()
-        som_image_base64 = result["som_image_base64"]
-        parsed_content_list = result["parsed_content_list"]
-
-        # Plot results
-        plot_results(image_path, som_image_base64, parsed_content_list)
-
-        # Print latency
-        logger.info(f"API Latency: {result['latency']:.2f} seconds")
-
-    except requests.exceptions.ConnectionError:
-        logger.error(f"Error: Could not connect to server at {server_url}")
-        logger.error("Please check if the server is running and the URL is correct")
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error making request to API: {e}")
-    except Exception as e:
-        logger.error(f"Error: {e}")
-
-
-def main() -> None:
-    """Main entry point for the client application."""
-    fire.Fire(parse_image)
-
-
+# Example usage:
 if __name__ == "__main__":
-    main()
+    # Create client (will auto-deploy if needed)
+    client = OmniParserClient()
+
+    # Parse an image
+    image = Image.open("../OpenAdapt/tests/assets/excel.png")
+    results = client.parse_image(image)
+
+    # Visualize results
+    if "error" not in results:
+        viz_image = client.visualize_results(image, results["parsed_content_list"])
+        viz_image.show()
