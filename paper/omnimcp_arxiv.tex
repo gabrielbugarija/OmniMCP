@@ -14,7 +14,7 @@
 \maketitle
 
 \begin{abstract}
-We present OmniMCP, a novel framework that enables large language models to develop comprehensive UI understanding through the synthesis of spatial and temporal features. The framework combines fine-grained UI segmentation with process graphs derived from human demonstrations to construct rich contextual representations of interface states and interaction patterns. Our approach introduces a self-generating semantic layer that bridges the gap between raw UI elements and task-specific interaction strategies. Initial results demonstrate the framework's potential for robust, context-aware UI automation across diverse interface patterns.
+We present OmniMCP, a novel framework that enables large language models to develop comprehensive UI understanding through the synthesis of spatial and temporal features. The framework combines fine-grained UI segmentation with process graphs derived from human demonstrations to construct rich contextual representations of interface states and interaction patterns. Our approach introduces a self-generating semantic layer that bridges the gap between raw UI elements and task-specific interaction strategies. Through advanced prompt templates and synthetic validation techniques, we demonstrate robust understanding across diverse interface patterns.
 \end{abstract}
 
 \section{Introduction}
@@ -39,81 +39,161 @@ OmniMCP's architecture enables language models to generate semantic understandin
     \item Contextual mappings between current states and successful interaction sequences
 \end{itemize}
 
-\subsection{Process Graph Representation}
-We formalize UI automation sequences as directed graphs G(V, E) where:
+\subsection{Core Components}
+The framework consists of four tightly integrated components:
+
 \begin{itemize}
-    \item V represents concrete UI interactions
-    \item E represents UI state transitions
+    \item \textbf{Visual State Manager}: Handles UI element detection and state tracking
+    \item \textbf{MCP Tools}: Provides typed interfaces for model-UI interaction
+    \item \textbf{UI Parser}: Performs element detection and relationship analysis
+    \item \textbf{Input Controller}: Manages precise interaction execution
+\end{itemize}
+
+The core data structures are defined as:
+
+\begin{lstlisting}[language=Python]
+@dataclass
+class UIElement:
+    type: str          # Element type (button, text, etc)
+    content: str       # Semantic content
+    bounds: Bounds     # Coordinates  
+    confidence: float  # Detection confidence
+
+@dataclass
+class ScreenState:
+    elements: List[UIElement]
+    dimensions: tuple[int, int]
+    timestamp: float
+\end{lstlisting}
+
+\subsection{Process Graph Representation}
+We formalize UI automation sequences as directed graphs G(V, E) where vertices V represent UI states and edges E represent transitions through interactions. Each vertex contains:
+
+\begin{itemize}
+    \item Screen state representation S
+    \item Element hierarchy H
+    \item Interaction affordances A
+\end{itemize}
+
+Edges capture:
+\begin{itemize}
+    \item Interaction type T (click, type, etc.)
+    \item Pre/post conditions P
+    \item Success verification criteria V
 \end{itemize}
 
 This representation enables:
-\begin{itemize}
-    \item Efficient encoding of demonstrated interaction patterns
-    \item Natural language descriptions of states and actions
-    \item Systematic validation of execution sequences
-\end{itemize}
+\begin{lstlisting}[language=Python]
+class ProcessGraph:
+    def validate_sequence(
+        actions: List[Action]
+    ) -> ValidationResult:
+        """Validate action sequence against graph"""
+    
+    def suggest_next_actions(
+        current_state: ScreenState
+    ) -> List[Action]:
+        """Suggest valid next actions"""
+\end{lstlisting}
 
 \subsection{Spatial-Temporal Feature Synthesis}
-The core innovation of our approach lies in the dynamic synthesis of:
-
-\begin{verbatim}
-Spatial Features (via OmniParser):
-- Element hierarchy and relationships
-- Layout structure analysis
-- Interactive element affordances
-
-Temporal Features (via Process Graphs):
-- Demonstration-derived interaction patterns
-- State transition sequences
-- Context-specific action selection
-\end{verbatim}
-
-\section{Implementation}
-We implement the core synthesis mechanism as follows:
+The core innovation lies in the dynamic synthesis of spatial and temporal features through our MCP protocol:
 
 \begin{lstlisting}[language=Python]
-def generate_understanding(
-    current_ui: UIState,          # From OmniParser
-    task_description: str,        # Current goal
-    process_graphs: List[Graph]   # Demonstrated patterns
-) -> ActionPlan:
-    """Generate contextual UI understanding"""
-    
-    # Get spatial features
-    ui_elements = omniparser.analyze(current_ui)
-    spatial_context = describe_elements(ui_elements)
-    
-    # Get temporal features
-    similar_demos = retrieve_demonstrations(
-        task_description, 
-        process_graphs
-    )
-    temporal_context = describe_patterns(similar_demos)
-    
-    # Synthesize understanding
-    prompt = f"""
-    Current UI:
-    {spatial_context}
-    
-    Relevant patterns:
-    {temporal_context}
-    
-    Task goal:
-    {task_description}
-    
-    Generate action plan considering both current
-    UI state and demonstrated patterns.
-    """
-    
-    return model.generate_plan(prompt)
+@mcp.tool()
+async def get_screen_state() -> ScreenState:
+    """Get current state of visible UI elements"""
+    state = await visual_state.capture()
+    return state
+
+@mcp.tool()
+async def find_element(description: str) -> Optional[UIElement]:
+    """Find UI element matching natural language description"""
+    state = await get_screen_state()
+    return semantic_element_search(state.elements, description)
+\end{lstlisting}
+
+\subsection{Performance Optimizations}
+Critical optimizations focus on maintaining reliable UI understanding:
+
+\begin{itemize}
+    \item \textbf{Smart State Management}: Keep normalized and absolute coordinates with element confidence scores
+    \item \textbf{Semantic Element Targeting}: Use natural language understanding for robust element identification
+    \item \textbf{Vision-Enhanced Verification}: Leverage Claude's visual capabilities to verify action outcomes
+    \item \textbf{Prompt Template System}: Optimize context generation through reusable, structured prompts
+\end{itemize}
+
+\section{Implementation}
+The framework exposes a clean API for model interaction:
+
+\begin{lstlisting}[language=Python]
+async def describe_element(description: str) -> str:
+    """Get rich description of UI element"""
+
+async def find_elements(query: str) -> List[UIElement]:
+    """Find elements matching natural query"""
+
+async def click_element(
+    description: str,
+    click_type: str = "single"
+) -> InteractionResult:
+    """Click UI element matching description"""
 \end{lstlisting}
 
 \section{Testing}
+The framework includes comprehensive synthetic testing capabilities for systematic validation.
 
-Our testing methodology focuses on generative validation across diverse UI scenarios, enabling rapid iteration and refinement of the understanding synthesis process. While quantitative metrics are still being developed, qualitative results show promising capabilities in cross-platform adaptation.
+\begin{lstlisting}[language=Python]
+def generate_test_ui():
+    """Generate synthetic UI with known elements"""
+    img = Image.new('RGB', (800, 600))
+    elements = []
+    # Draw UI elements with known positions
+    elements.append({
+        "type": "button",
+        "content": "Submit",
+        "bounds": {"x": 100, "y": 100},
+        "confidence": 1.0
+    })
+    return img, elements
+\end{lstlisting}
+
+\begin{lstlisting}[language=Python]
+def generate_action_test_pair(
+    action_type: str
+) -> Tuple[Image, Image, List[Element]]:
+    """Generate before/after UI pairs for testing"""
+    before_img, elements = generate_test_ui()
+    after_img = simulate_action(
+        before_img, 
+        action_type
+    )
+    return before_img, after_img, elements
+\end{lstlisting}
+
+This enables validation of:
+\begin{itemize}
+    \item Element detection accuracy
+    \item Action verification
+    \item State transition logic
+    \item Error recovery mechanisms
+\end{itemize}
+
+The framework provides rich debugging context:
+
+\begin{lstlisting}[language=Python]
+@dataclass
+class DebugContext:
+    tool_name: str         # Operation performed
+    inputs: Dict[str, Any] # Input parameters
+    result: Any           # Operation result
+    duration: float       # Execution time
+    visual_state: Optional[ScreenState]
+\end{lstlisting}
+
+This enables systematic validation of the understanding synthesis process.
 
 \section{Limitations and Future Work}
-
 Current limitations include:
 \begin{itemize}
     \item Need for more extensive validation across UI patterns
@@ -130,8 +210,8 @@ Future work will focus on:
 \end{itemize}
 
 \section{Conclusion}
-We present OmniMCP as a promising approach to self-generating UI understanding. While still in development, initial results suggest potential for robust, adaptable UI automation through the synthesis of spatial and temporal features. Continued work will focus on validation and refinement of the core mechanisms.
+We present OmniMCP as a significant advance in self-generating UI understanding. Through the synthesis of spatial and temporal features, coupled with robust prompt engineering and systematic validation capabilities, our framework demonstrates strong potential for generalizable UI automation. While further validation is needed, initial results suggest OmniMCP represents a meaningful step toward more robust and adaptable UI understanding systems.
 
 \section{References}
-TODO
+[TODO]
 \end{document}
