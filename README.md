@@ -37,7 +37,7 @@ OmniMCP provides rich UI context and interaction capabilities to AI models throu
 <br>
 
 <p align="center">
-    <img src="https://github.com/user-attachments/assets/9ec7feac-c1e9-4480-981b-93de98de193c" width="400" alt="External API Publication (MCP)">
+    <img src="https://github.com/user-attachments/assets/78d31af5-0394-4dfc-a48e-97b524e04878" width="400" alt="External API Publication (MCP)">
 </p>
 
 4. **External API Publication (MCP)**: Finally, OmniMCP exposes this dynamically generated internal API through the [Model Context Protocol (MCP)](https://github.com/modelcontextprotocol). This provides a consistent and straightforward interface for both humans (via natural language translated by the LLM) and AI models to interact with the UI. Through this MCP interface, a full range of UI operations can be performed with verification, all powered by the AI model's deep, dynamically created understanding of the UI's spatiotemporal context.
