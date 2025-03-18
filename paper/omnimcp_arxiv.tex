@@ -42,6 +42,53 @@ Programming by Demonstration (PbD) and Interactive Task Learning (ITL) paradigms
 
 While existing work has made significant progress in individual aspects of UI automation, there remains a need for frameworks that can synthesize spatial-temporal understanding with robust comprehension capabilities. Our work builds upon these foundations while introducing novel approaches to developing and maintaining rich contextual understanding of interface patterns.
 
+\subsection{Model Context Protocol: Standardized Tool Integration}
+The Model Context Protocol (MCP) represents a significant advancement in addressing the challenge of connecting language models to external tools and resources \cite{anthropic2023mcp}. Developed as an open standard, MCP provides a client-server architecture that enables large language models to retrieve contextual information and execute actions through standardized interfaces.
+
+At its core, MCP aims to solve the "N×M problem" in AI systems integration?where N models must connect with M tools, potentially requiring N×M custom integrations. By introducing a standardized protocol for these interactions, MCP reduces this complexity to N+M connections \cite{mcpstandardization2023}. The protocol establishes a JSON-RPC 2.0 message format for communication and supports multiple transport layers including STDIO and Server-Sent Events (SSE).
+
+MCP's architecture is designed around three primary capabilities: Resources (contextual data), Tools (executable functions), and Prompts (reusable templates). When an MCP client establishes a connection with a server, they negotiate protocol versions and available features, allowing the client to dynamically discover the server's capabilities \cite{anthropic2024mcpspec}.
+
+Recent implementations of MCP in development tools like Cursor, Zed, and Replit demonstrate its practical applications for enhancing context-aware coding assistance \cite{cursor2024}. For instance, these integrations allow AI assistants to access project-specific information, search repositories, and interact with external services?all while maintaining a consistent interaction model.
+
+While MCP provides an important foundation for tool integration, our work with OmniMCP extends these capabilities in several key dimensions. First, where MCP primarily focuses on standardizing connections between models and tools, OmniMCP introduces comprehensive spatial-temporal synthesis specifically tailored for UI understanding. Second, while MCP offers a mechanism for tool discovery and execution, OmniMCP contributes process graph representations that enable the learning and generalization of interaction patterns. Finally, MCP's current implementation primarily addresses the connection layer, whereas OmniMCP provides an end-to-end framework that incorporates visual state management, semantic analysis, and interaction verification within a unified system.
+
+The emergence of MCP represents an important step toward standardized AI tool integration, and our work builds upon this foundation to address the specific challenges of UI automation through advanced spatial-temporal understanding.
+
+\subsection{OmniParser and Visual UI Understanding}
+
+Recent advances in visual UI understanding have been marked by the development of Microsoft OmniParser (Chen et al., 2024), which represents a significant step forward in cross-platform interface parsing. Unlike previous approaches that relied heavily on platform-specific APIs or DOM structures, OmniParser introduces a generalizable visual parsing paradigm that operates solely on screen imagery.
+
+The architecture employs a dual-model approach:
+\begin{itemize}
+    \item A specialized detection model based on YOLOv8/YOLOv8 Nano fine-tuned on extensive datasets (67K-100K unique screenshots) for robust element localization
+    \item A semantic captioning model utilizing Florence-2 or BLIP-2 architectures trained on 7K icon-description pairs for generating contextually-aware element descriptions
+\end{itemize}
+
+The system's processing pipeline implements a novel two-stage analysis:
+\begin{equation}
+    P(e|I) = f_{detect}(I) \cdot f_{caption}(I, R)
+\end{equation}
+
+where $I$ represents the input image, $R$ denotes detected regions, and $f_{detect}$ and $f_{caption}$ represent the detection and semantic captioning functions respectively.
+
+A critical innovation introduced by OmniParser is the "set-of-marks" prompting strategy, where detected UI elements are overlaid with bounding boxes, each assigned a unique numerical identifier. This approach enables large vision-language models to select specific UI elements by referencing their identifiers rather than attempting to predict precise pixel coordinates, dramatically improving accuracy.
+
+Empirical evaluation across multiple benchmarks demonstrates substantial improvements over previous SOTA:
+\begin{itemize}
+    \item +38.8\% average accuracy on ScreenSpot Pro when combined with GPT-4o (39.6\% vs. 0.8\%)
+    \item >20\% improvement in text/icon widget recognition on ScreenSpot compared to GPT-4V
+    \item Higher element accuracy and operation F1 scores on Mind2Web than HTML-based methods
+    \item +4.7\% task success rate on AITW mobile UI benchmark compared to GPT-4V baseline
+    \item Improved bounding box ID prediction accuracy from 70.5\% to 93.8\% with local semantics on SeeAssign Task
+\end{itemize}
+
+The recently released OmniParser V2 introduces significant enhancements including 60\% faster inference speeds, improved detection of smaller interactive elements, and broader OS and application support. Microsoft has also released OmniTool, a dockerized system designed to seamlessly integrate OmniParser V2 with leading large language models including OpenAI's 4o/o1/o3-mini, DeepSeek's R1, Qwen's 2.5VL, and Anthropic's Sonnet.
+
+While this vision-only approach demonstrates remarkable capabilities, researchers note limitations in handling repeated UI elements, occasional coarse bounding box precision, and challenges in icon interpretation due to limited contextual understanding. Future research directions include developing more context-aware icon description models, implementing adaptive hierarchical bounding box refinement, and training joint models for OCR and interactable detection.
+
+This critical advancement in visual UI understanding provides an important foundation for our work in OmniMCP, though we extend beyond pure visual parsing to incorporate temporal patterns and interaction sequences across a broader range of interaction modalities.
+
 \section{Methodology}
 
 \subsection{Framework Overview}
