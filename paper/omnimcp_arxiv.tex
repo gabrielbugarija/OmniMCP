@@ -14,7 +14,7 @@
 \maketitle
 
 \begin{abstract}
-We present OmniMCP, a novel framework that enables large language models to develop comprehensive UI understanding through the synthesis of spatial and temporal features. The framework combines fine-grained UI segmentation with process graphs derived from human demonstrations to construct rich contextual representations of interface states and interaction patterns. Our approach introduces a self-generating semantic layer that bridges the gap between raw UI elements and task-specific interaction strategies. Through advanced prompt templates and synthetic validation techniques, we demonstrate robust understanding across diverse interface patterns.
+We present OmniMCP, a novel framework that enables large language models to develop comprehensive UI understanding through the synthesis of spatial and temporal features. The framework combines fine-grained UI segmentation with process graphs derived from human demonstrations to construct rich contextual representations of interface states and interaction patterns. Our approach introduces a self-generating comprehension engine that bridges the gap between raw UI elements and task-specific interaction strategies. Through advanced prompt templates and synthetic validation techniques, we demonstrate robust understanding across diverse interface patterns.
 
 % Our experimental results show [X]\% improvement in task completion rates across [Y] different UI patterns compared to baseline approaches. The framework demonstrates particular effectiveness in [specific use case], achieving [metric] performance. Key technical innovations include [innovation 1] and [innovation 2].
 
@@ -30,7 +30,17 @@ This paper introduces OmniMCP, a framework that addresses these limitations thro
 \end{itemize}
 
 \section{Related Work}
-The challenge of UI automation has been approached from multiple angles in recent years. Screen parsing approaches have focused on hierarchical element detection, while demonstration-based methods have emphasized pattern recognition. However, few approaches have attempted to synthesize both spatial and temporal understanding in a unified framework.
+The challenge of UI automation has been approached from multiple angles in recent years. Traditional screen parsing approaches have focused on hierarchical element detection, while demonstration-based methods have emphasized pattern recognition. However, few approaches have attempted to synthesize both spatial and temporal understanding in a unified framework.
+
+Image-based automation tools like Sikuli have demonstrated success in visual recognition and GUI component interaction through image matching, particularly useful when traditional element locators are unavailable. Accessibility-based approaches, exemplified by AutoHotkey UIAutomation framework, leverage system-level accessibility APIs to interact with UI elements programmatically.
+
+Recent advances in RPA platforms like UiPath have expanded automation capabilities across diverse applications, though they often require significant technical expertise despite being marketed as low-code solutions. While these tools excel at specific use cases, they typically lack the ability to develop deeper understanding of UI patterns and interaction sequences.
+
+The emergence of more sophisticated approaches using computer vision and machine learning, such as LayoutLM and Region Proposal Networks (RPNs), has enabled richer UI understanding. LayoutLM in particular demonstrates the potential of combining visual and textual understanding through pre-trained models that integrate both content and layout information.
+
+Programming by Demonstration (PbD) and Interactive Task Learning (ITL) paradigms have shown promise in allowing systems to learn from human demonstrations. These approaches focus on converting observed actions into generalizable interaction patterns, though they often struggle with complex UI variations and error recovery.
+
+While existing work has made significant progress in individual aspects of UI automation, there remains a need for frameworks that can synthesize spatial-temporal understanding with robust comprehension capabilities. Our work builds upon these foundations while introducing novel approaches to developing and maintaining rich contextual understanding of interface patterns.
 
 \section{Methodology}
 
