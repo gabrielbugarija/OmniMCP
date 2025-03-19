@@ -147,6 +147,45 @@ OmniMCP's architecture enables language models to generate semantic understandin
     \item Contextual mappings between current states and successful interaction sequences
 \end{itemize}
 
+\subsection{Bridging Symbolic and Generative UI Understanding}
+
+OmniMCP introduces a novel approach that seamlessly integrates symbolic and generative representations of user interfaces. This integration addresses fundamental limitations in existing UI automation approaches by combining the precision of symbolic systems with the flexibility of neural models.
+
+\subsubsection{Perception-Guided Structuring}
+
+The core innovation in OmniMCP is its perception-guided structuring process, where vision-language models (VLMs) extract structured symbolic representations from raw UI visuals. This creates two complementary representations:
+
+\begin{enumerate}
+    \item Element trees that capture UI components and their relationships
+    \item Process graphs that encode interaction sequences and state transitions
+\end{enumerate}
+
+Unlike traditional symbolic approaches that struggle with visual variations, OmniMCP's structuring is guided by neural perception, making it robust to UI changes while maintaining the benefits of explicit representation.
+
+\subsubsection{Dual Representation Advantage}
+
+OmniMCP maintains both symbolic and generative representations simultaneously with bidirectional information flow between them:
+
+\begin{center}
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Representation} & \textbf{Strengths} & \textbf{Role in OmniMCP} \\
+\hline
+\textbf{Symbolic} & Precision, verifiability & Element validation, action verification \\
+\hline
+\textbf{Generative} & Flexibility, semantic understanding & Visual parsing, intent recognition \\
+\hline
+\end{tabular}
+\end{center}
+
+This dual approach enables OmniMCP to handle scenarios that would challenge either paradigm individually. When encountering unfamiliar UI patterns, the VLM recognizes their purpose based on visual cues and generates appropriate symbolic representations. Conversely, the symbolic representation ensures that actions target exactly the intended elements with verifiable outcomes.
+
+\subsubsection{Self-Improving Through Interaction}
+
+A key benefit of OmniMCP's approach is that representation quality improves through interaction. As the system observes UI states and action outcomes, it refines both its process graphs and element recognition capabilities. This learning creates increasingly accurate symbolic representations that further enhance the VLM's performance in a continuous improvement loop.
+
+The dynamic interplay between neural and symbolic representations enables robust UI automation that adapts to evolving interfaces while maintaining reliability?addressing the fundamental challenge of creating generalizable UI automation systems.
+
 \subsection{Core Components}
 The framework consists of four tightly integrated components:
 

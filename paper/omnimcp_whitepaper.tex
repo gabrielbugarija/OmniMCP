@@ -43,22 +43,6 @@ Our key contributions include:
 
 Looking forward, we also explore how this spatial-temporal synthesis framework provides an ideal foundation for reinforcement learning approaches to UI automation. The structured representation of interface states and interactions creates a well-defined action space for RL algorithms, while our process graphs offer a mechanism for warm-starting policies based on human demonstrations.
 
-\section{Core Framework Components}
-
-OmniMCP's architecture integrates four tightly integrated components:
-
-\subsection{Visual State Manager}
-The Visual State Manager handles UI element detection, state management and caching, rich context extraction, and history tracking. It provides a comprehensive representation of the current UI state, enabling models to reason about available elements and their relationships.
-
-\subsection{MCP Tools Layer}
-The MCP Tools layer implements the Model Context Protocol to provide standardized interfaces for LLM interaction with the UI automation system. This includes tool definitions and execution, typed responses, error handling, and debug support. The layer ensures consistent and reliable communication between models and the UI automation system.
-
-\subsection{UI Parser}
-The UI Parser leverages OmniParser for element detection, text recognition, visual analysis, and understanding element relationships. It transforms raw screen captures into structured representations that models can reason about effectively.
-
-\subsection{Input Controller}
-The Input Controller manages precise mouse control, keyboard input, action verification, and movement optimization. It ensures reliable execution of model-directed actions and provides verification that operations completed successfully.
-
 \section{The Spatial-Temporal Understanding Pipeline}
 
 \begin{figure}[h]
@@ -100,6 +84,61 @@ Utilizing the rich spatial and temporal context it has acquired, OmniMCP leverag
 
 \subsection{External API Publication (MCP)}
 Finally, OmniMCP exposes this dynamically generated internal API through the Model Context Protocol (MCP). This provides a consistent and straightforward interface for both humans (via natural language translated by the LLM) and AI models to interact with the UI. Through this MCP interface, a full range of UI operations can be performed with verification, all powered by the AI model's deep, dynamically created understanding of the UI's spatiotemporal context.
+
+\section{Core Framework Components}
+
+OmniMCP's architecture integrates four tightly integrated components:
+
+\subsection{Visual State Manager}
+The Visual State Manager handles UI element detection, state management and caching, rich context extraction, and history tracking. It provides a comprehensive representation of the current UI state, enabling models to reason about available elements and their relationships.
+
+\subsection{MCP Tools Layer}
+The MCP Tools layer implements the Model Context Protocol to provide standardized interfaces for LLM interaction with the UI automation system. This includes tool definitions and execution, typed responses, error handling, and debug support. The layer ensures consistent and reliable communication between models and the UI automation system.
+
+\subsection{UI Parser}
+The UI Parser leverages OmniParser for element detection, text recognition, visual analysis, and understanding element relationships. It transforms raw screen captures into structured representations that models can reason about effectively.
+
+\subsection{Input Controller}
+The Input Controller manages precise mouse control, keyboard input, action verification, and movement optimization. It ensures reliable execution of model-directed actions and provides verification that operations completed successfully.
+
+\section{Bridging Symbolic and Generative UI Understanding}
+
+OmniMCP introduces a novel approach that seamlessly integrates symbolic and generative representations of user interfaces. This integration addresses fundamental limitations in existing UI automation approaches by combining the precision of symbolic systems with the flexibility of neural models.
+
+\subsection{Perception-Guided Structuring}
+
+The core innovation in OmniMCP is its perception-guided structuring process, where vision-language models (VLMs) extract structured symbolic representations from raw UI visuals. This creates two complementary representations:
+
+\begin{enumerate}
+    \item Element trees that capture UI components and their relationships
+    \item Process graphs that encode interaction sequences and state transitions
+\end{enumerate}
+
+Unlike traditional symbolic approaches that struggle with visual variations, OmniMCP's structuring is guided by neural perception, making it robust to UI changes while maintaining the benefits of explicit representation.
+
+\subsection{Dual Representation Advantage}
+
+OmniMCP maintains both symbolic and generative representations simultaneously with bidirectional information flow between them:
+
+\begin{center}
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Representation} & \textbf{Strengths} & \textbf{Role in OmniMCP} \\
+\hline
+\textbf{Symbolic} & Precision, verifiability & Element validation, action verification \\
+\hline
+\textbf{Generative} & Flexibility, semantic understanding & Visual parsing, intent recognition \\
+\hline
+\end{tabular}
+\end{center}
+
+This dual approach enables OmniMCP to handle scenarios that would challenge either paradigm individually. When encountering unfamiliar UI patterns, the VLM recognizes their purpose based on visual cues and generates appropriate symbolic representations. Conversely, the symbolic representation ensures that actions target exactly the intended elements with verifiable outcomes.
+
+\subsection{Self-Improving Through Interaction}
+
+A key benefit of OmniMCP's approach is that representation quality improves through interaction. As the system observes UI states and action outcomes, it refines both its process graphs and element recognition capabilities. This learning creates increasingly accurate symbolic representations that further enhance the VLM's performance in a continuous improvement loop.
+
+The dynamic interplay between neural and symbolic representations enables robust UI automation that adapts to evolving interfaces while maintaining reliability?addressing the fundamental challenge of creating generalizable UI automation systems.
 
 \section{Process Graph Representation}
 
