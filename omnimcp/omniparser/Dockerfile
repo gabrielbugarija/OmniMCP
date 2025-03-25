@@ -1,3 +1,5 @@
+# omnimcp/ominparser/Dockerfile
+
 FROM nvidia/cuda:12.3.1-devel-ubuntu22.04
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \

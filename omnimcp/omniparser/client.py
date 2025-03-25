@@ -36,14 +36,15 @@ class OmniParserClient:
 
             # Check if any instances are running
             import boto3
-            ec2 = boto3.resource('ec2')
+
+            ec2 = boto3.resource("ec2")
             instances = ec2.instances.filter(
                 Filters=[
-                    {'Name': 'tag:Name', 'Values': ['omniparser']},
-                    {'Name': 'instance-state-name', 'Values': ['running']}
+                    {"Name": "tag:Name", "Values": ["omniparser"]},
+                    {"Name": "instance-state-name", "Values": ["running"]},
                 ]
             )
-            
+
             instance = next(iter(instances), None)
             if instance and instance.public_ip_address:
                 self.server_url = f"http://{instance.public_ip_address}:8000"
@@ -57,8 +58,8 @@ class OmniParserClient:
                 for i in range(max_retries):
                     instances = ec2.instances.filter(
                         Filters=[
-                            {'Name': 'tag:Name', 'Values': ['omniparser']},
-                            {'Name': 'instance-state-name', 'Values': ['running']}
+                            {"Name": "tag:Name", "Values": ["omniparser"]},
+                            {"Name": "instance-state-name", "Values": ["running"]},
                         ]
                     )
                     instance = next(iter(instances), None)
@@ -69,9 +70,7 @@ class OmniParserClient:
                 else:
                     raise RuntimeError("Failed to deploy server")
             else:
-                raise RuntimeError(
-                    "No server URL provided and auto_deploy is disabled"
-                )
+                raise RuntimeError("No server URL provided and auto_deploy is disabled")
 
         # Verify server is responsive
         self._check_server()
@@ -101,7 +100,7 @@ class OmniParserClient:
             response = requests.post(
                 f"{self.server_url}/parse/",
                 json={"base64_image": image_bytes},
-                timeout=30
+                timeout=30,
             )
             response.raise_for_status()
             return response.json()
@@ -112,14 +111,13 @@ class OmniParserClient:
     def _image_to_base64(image: Image.Image) -> str:
         """Convert PIL Image to base64 string."""
         import io
+
         buffered = io.BytesIO()
         image.save(buffered, format="PNG")
         return base64.b64encode(buffered.getvalue()).decode()
 
     def visualize_results(
-        self,
-        image: Image.Image,
-        parsed_content: List[Dict]
+        self, image: Image.Image, parsed_content: List[Dict]
     ) -> Image.Image:
         """Visualize parsing results on the image.
 

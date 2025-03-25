@@ -1,3 +1,5 @@
+# omnimcp/config.py
+
 """Configuration management for OmniMCP."""
 
 import os
@@ -9,18 +11,21 @@ from pydantic_settings import BaseSettings
 
 class OmniMCPConfig(BaseSettings):
     """Configuration settings for OmniMCP."""
-    
+
     # Claude API configuration
     ANTHROPIC_API_KEY: Optional[str] = None
-    
+
+    # Auto-shutdown OmniParser after 20min inactivity
+    INACTIVITY_TIMEOUT_MINUTES: int = 20
+
     # OmniParser configuration
     OMNIPARSER_URL: Optional[str] = None
-    
+
     # AWS deployment settings (for remote OmniParser)
     AWS_ACCESS_KEY_ID: Optional[str] = None
     AWS_SECRET_ACCESS_KEY: Optional[str] = None
     AWS_REGION: Optional[str] = "us-west-2"
-    
+
     # OmniParser deployment configuration
     PROJECT_NAME: str = "omniparser"
     REPO_URL: str = "https://github.com/microsoft/OmniParser.git"
@@ -30,19 +35,20 @@ class OmniMCPConfig(BaseSettings):
     AWS_EC2_USER: str = "ubuntu"
     PORT: int = 8000  # FastAPI port
     COMMAND_TIMEOUT: int = 600  # 10 minutes
-    
+
     # Debug settings
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
-    
+
     class Config:
         """Pydantic settings configuration."""
+
         env_file = ".env"
         env_file_encoding = "utf-8"
-        
+
         # Allow extra fields in the settings
         extra = "ignore"
-    
+
     # Properties for OmniParser deployment
     @property
     def CONTAINER_NAME(self) -> str:
