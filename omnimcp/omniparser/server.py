@@ -26,8 +26,6 @@ from omnimcp.config import config
 LAMBDA_FUNCTION_NAME = f"{config.PROJECT_NAME}-auto-shutdown"
 # CloudWatch rule name for monitoring
 CLOUDWATCH_RULE_NAME = f"{config.PROJECT_NAME}-inactivity-monitor"
-# API Gateway name for instance discovery
-API_GATEWAY_NAME = f"{config.PROJECT_NAME}-discovery"
 
 CLEANUP_ON_FAILURE = False
 
@@ -607,291 +605,6 @@ def lambda_handler(event, context):
         logger.error(f"Error creating auto-shutdown infrastructure: {e}")
 
 
-def create_instance_discovery_api() -> str:
-    """Create API Gateway endpoint for instance discovery.
-
-    Returns:
-        str: The URL of the API Gateway endpoint
-    """
-    apigw_client = boto3.client("apigateway", region_name=config.AWS_REGION)
-    lambda_client = boto3.client("lambda", region_name=config.AWS_REGION)
-    iam_client = boto3.client("iam", region_name=config.AWS_REGION)
-
-    # Create IAM role for Lambda function
-    role_name = f"{config.PROJECT_NAME}-discovery-role"
-    try:
-        assume_role_policy = {
-            "Version": "2012-10-17",
-            "Statement": [
-                {
-                    "Effect": "Allow",
-                    "Principal": {"Service": "lambda.amazonaws.com"},
-                    "Action": "sts:AssumeRole",
-                }
-            ],
-        }
-
-        response = iam_client.create_role(
-            RoleName=role_name, AssumeRolePolicyDocument=json.dumps(assume_role_policy)
-        )
-
-        role_arn = response["Role"]["Arn"]
-
-        # Attach EC2 and CloudWatch permissions
-        iam_client.attach_role_policy(
-            RoleName=role_name, PolicyArn="arn:aws:iam::aws:policy/AmazonEC2FullAccess"
-        )
-
-        iam_client.attach_role_policy(
-            RoleName=role_name,
-            PolicyArn="arn:aws:iam::aws:policy/CloudWatchLogsFullAccess",
-        )
-
-        logger.info(f"Created IAM role for discovery Lambda function: {role_arn}")
-
-        # Wait for role to be available
-        time.sleep(10)
-
-    except ClientError as e:
-        if e.response["Error"]["Code"] == "EntityAlreadyExists":
-            logger.info(f"IAM role {role_name} already exists, retrieving ARN...")
-            response = iam_client.get_role(RoleName=role_name)
-            role_arn = response["Role"]["Arn"]
-        else:
-            logger.error(f"Error creating IAM role: {e}")
-            return "Error: Failed to create IAM role"
-
-    # Create Lambda function for instance discovery
-    lambda_function_name = f"{config.PROJECT_NAME}-discovery"
-    lambda_code = f"""
-import boto3
-import json
-
-def lambda_handler(event, context):
-    ec2 = boto3.resource('ec2', region_name='{config.AWS_REGION}')
-    ec2_client = boto3.client('ec2', region_name='{config.AWS_REGION}')
-
-    # Find instance with project tag
-    instances = list(ec2.instances.filter(
-        Filters=[
-            {{'Name': 'tag:Name', 'Values': ['{config.PROJECT_NAME}']}},
-            {{'Name': 'instance-state-name', 'Values': ['pending', 'running', 'stopped']}}
-        ]
-    ))
-
-    if not instances:
-        return {{
-            'statusCode': 404,
-            'headers': {{'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'}},
-            'body': json.dumps({{'error': 'No instance found'}})
-        }}
-
-    instance = instances[0]
-
-    # Start the instance if it's stopped
-    if instance.state['Name'] == 'stopped':
-        try:
-            ec2_client.start_instances(InstanceIds=[instance.id])
-            return {{
-                'statusCode': 202,
-                'headers': {{'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'}},
-                'body': json.dumps({{
-                    'instance_id': instance.id,
-                    'status': 'starting',
-                    'message': 'Instance is starting. Please try again in a few minutes.'
-                }})
-            }}
-        except Exception as e:
-            return {{
-                'statusCode': 500,
-                'headers': {{'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'}},
-                'body': json.dumps({{'error': f'Failed to start instance: {{str(e)}}'}})
-            }}
-
-    # Return info for running instance
-    if instance.state['Name'] == 'running':
-        return {{
-            'statusCode': 200,
-            'headers': {{'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'}},
-            'body': json.dumps({{
-                'instance_id': instance.id,
-                'public_ip': instance.public_ip_address,
-                'status': instance.state['Name'],
-                'api_url': f'http://{{instance.public_ip_address}}:{config.PORT}'
-            }})
-        }}
-
-    # Instance is in another state (e.g., pending)
-    return {{
-        'statusCode': 202,
-        'headers': {{'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'}},
-        'body': json.dumps({{
-            'instance_id': instance.id,
-            'status': instance.state['Name'],
-            'message': f'Instance is {{instance.state["Name"]}}. Please try again shortly.'
-        }})
-    }}
-    """
-
-    try:
-        # Delete existing function if it exists
-        try:
-            lambda_client.delete_function(FunctionName=lambda_function_name)
-            logger.info(f"Deleted existing Lambda function: {lambda_function_name}")
-        except ClientError:
-            pass  # Function doesn't exist, which is fine
-
-        # Create new function
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, "a") as zip_file:
-            zip_file.writestr("lambda_function.py", lambda_code)
-
-        response = lambda_client.create_function(
-            FunctionName=lambda_function_name,
-            Runtime="python3.9",
-            Role=role_arn,
-            Handler="lambda_function.lambda_handler",
-            Code={"ZipFile": zip_buffer.getvalue()},
-            Timeout=30,
-            MemorySize=128,
-            Description=f"Discovery function for {config.PROJECT_NAME} instance",
-        )
-
-        lambda_arn = response["FunctionArn"]
-        logger.info(f"Created discovery Lambda function: {lambda_arn}")
-
-        # Create REST API
-        try:
-            # Find existing API
-            apis = apigw_client.get_rest_apis()
-            api_id = None
-
-            for api in apis["items"]:
-                if api["name"] == API_GATEWAY_NAME:
-                    api_id = api["id"]
-                    logger.info(f"Found existing API Gateway: {api_id}")
-                    break
-
-            if not api_id:
-                # Create new API
-                response = apigw_client.create_rest_api(
-                    name=API_GATEWAY_NAME,
-                    description=f"API for discovering {config.PROJECT_NAME} instances",
-                    endpointConfiguration={"types": ["REGIONAL"]},
-                )
-                api_id = response["id"]
-                logger.info(f"Created new API Gateway: {api_id}")
-
-            # Get resources
-            resources = apigw_client.get_resources(restApiId=api_id)
-            root_id = None
-            resource_id = None
-
-            for resource in resources["items"]:
-                if resource["path"] == "/":
-                    root_id = resource["id"]
-                elif resource["path"] == "/discover":
-                    resource_id = resource["id"]
-
-            # Create resource if not exists
-            if not resource_id:
-                response = apigw_client.create_resource(
-                    restApiId=api_id, parentId=root_id, pathPart="discover"
-                )
-                resource_id = response["id"]
-                logger.info("Created API resource: /discover")
-
-            # Create GET method
-            try:
-                apigw_client.put_method(
-                    restApiId=api_id,
-                    resourceId=resource_id,
-                    httpMethod="GET",
-                    authorizationType="NONE",
-                    apiKeyRequired=False,
-                )
-                logger.info("Created API method: GET /discover")
-            except ClientError as e:
-                if e.response["Error"]["Code"] != "ConflictException":
-                    raise
-                logger.info("API method GET /discover already exists")
-
-            # Set Lambda integration
-            try:
-                apigw_client.put_integration(
-                    restApiId=api_id,
-                    resourceId=resource_id,
-                    httpMethod="GET",
-                    type="AWS_PROXY",
-                    integrationHttpMethod="POST",
-                    uri=(
-                        f"arn:aws:apigateway:{config.AWS_REGION}:lambda:path/2015-03-31"
-                        f"/functions/{lambda_arn}/invocations"
-                    ),
-                )
-                logger.info("Set Lambda integration for GET /discover")
-            except ClientError as e:
-                if e.response["Error"]["Code"] != "ConflictException":
-                    raise
-                # Update existing integration
-                apigw_client.update_integration(
-                    restApiId=api_id,
-                    resourceId=resource_id,
-                    httpMethod="GET",
-                    patchOperations=[
-                        {
-                            "op": "replace",
-                            "path": "/uri",
-                            "value": (
-                                f"arn:aws:apigateway:{config.AWS_REGION}:lambda:path/"
-                                f"2015-03-31/functions/{lambda_arn}/invocations"
-                            ),
-                        }
-                    ],
-                )
-                logger.info("Updated Lambda integration for GET /discover")
-
-            # Set Lambda permissions
-            try:
-                source_arn = (
-                    f"arn:aws:execute-api:{config.AWS_REGION}:*:{api_id}/*/GET/discover"
-                )
-                lambda_client.add_permission(
-                    FunctionName=lambda_function_name,
-                    StatementId=f"{config.PROJECT_NAME}-apigw-permission",
-                    Action="lambda:InvokeFunction",
-                    Principal="apigateway.amazonaws.com",
-                    SourceArn=source_arn,
-                )
-                logger.info("Added Lambda permission for API Gateway")
-            except ClientError as e:
-                if e.response["Error"]["Code"] != "ResourceConflictException":
-                    raise
-                logger.info("Lambda permission for API Gateway already exists")
-
-            # Deploy API
-            deployment = apigw_client.create_deployment(
-                restApiId=api_id, stageName="prod"
-            )
-            logger.info(f"Deployed API Gateway: {deployment=}")
-
-            # Return API endpoint
-            api_endpoint = (
-                f"https://{api_id}.execute-api."
-                f"{config.AWS_REGION}.amazonaws.com/prod/discover"
-            )
-            logger.info(f"API Gateway endpoint: {api_endpoint}")
-            return api_endpoint
-
-        except Exception as e:
-            logger.error(f"Error creating or updating API Gateway: {e}")
-            return "Error: Failed to create API Gateway"
-
-    except Exception as e:
-        logger.error(f"Error creating discovery infrastructure: {e}")
-        return "Error: Failed to create discovery infrastructure"
-
-
 class Deploy:
     """Class handling deployment operations for OmniParser."""
 
@@ -1020,10 +733,6 @@ class Deploy:
 
                 # Final status check
                 execute_command(ssh_client, f"docker ps | grep {config.CONTAINER_NAME}")
-
-                # Create discovery API
-                discovery_url = create_instance_discovery_api()
-                logger.info(f"Instance discovery API available at: {discovery_url}")
 
                 server_url = f"http://{instance_ip}:{config.PORT}"
                 logger.info(f"Deployment complete. Server running at: {server_url}")
@@ -1249,7 +958,6 @@ class Deploy:
         ec2_client = boto3.client("ec2", region_name=config.AWS_REGION)
         lambda_client = boto3.client("lambda", region_name=config.AWS_REGION)
         events_client = boto3.client("events", region_name=config.AWS_REGION)
-        apigw_client = boto3.client("apigateway", region_name=config.AWS_REGION)
         iam_client = boto3.client("iam", region_name=config.AWS_REGION)
 
         # Terminate EC2 instances
@@ -1294,29 +1002,6 @@ class Deploy:
                 logger.info(f"Lambda function {LAMBDA_FUNCTION_NAME} does not exist")
             else:
                 logger.error(f"Error deleting Lambda function: {e}")
-
-        # Delete discovery Lambda and API Gateway
-        try:
-            # Find and delete API Gateway
-            apis = apigw_client.get_rest_apis()
-            for api in apis["items"]:
-                if api["name"] == API_GATEWAY_NAME:
-                    api_id = api["id"]
-                    logger.info(f"Deleting API Gateway: {api_id}")
-                    apigw_client.delete_rest_api(restApiId=api_id)
-                    logger.info(f"Deleted API Gateway: {API_GATEWAY_NAME}")
-                    break
-        except ClientError as e:
-            logger.error(f"Error deleting API Gateway: {e}")
-
-        try:
-            lambda_client.delete_function(
-                FunctionName=f"{config.PROJECT_NAME}-discovery"
-            )
-            logger.info("Deleted discovery Lambda function")
-        except ClientError as e:
-            if e.response["Error"]["Code"] != "ResourceNotFoundException":
-                logger.error(f"Error deleting discovery Lambda function: {e}")
 
         # Delete IAM roles
         for role_name in [
@@ -1500,67 +1185,64 @@ class Deploy:
         except Exception as e:
             logger.error(f"Error retrieving Lambda logs: {e}")
 
-        # Check for discovery API logs if they exist
-        logger.info("\n=== API Gateway Access Logs ===")
-        try:
-            # Find API ID first
-            apigw_client = boto3.client("apigateway", region_name=config.AWS_REGION)
-            apis = apigw_client.get_rest_apis()
-
-            api_id = None
-            for api in apis.get("items", []):
-                if api["name"] == API_GATEWAY_NAME:
-                    api_id = api["id"]
-                    break
-
-            if api_id:
-                # API Gateway logs would be in a format like:
-                # /aws/apigateway/{api-id}/stage-name
-                log_group_name = f"API-Gateway-Execution-Logs_{api_id}/prod"
-
-                try:
-                    log_streams = cloudwatch_logs.describe_log_streams(
-                        logGroupName=log_group_name,
-                        orderBy="LastEventTime",
-                        descending=True,
-                        limit=5,
-                    )
-
-                    if not log_streams.get("logStreams"):
-                        logger.info("No API Gateway access logs found")
-                    else:
-                        # Process log streams
-                        for stream in log_streams.get("logStreams", [])[:3]:
-                            stream_name = stream["logStreamName"]
-                            logger.info(f"API access log stream: {stream_name}")
-
-                            logs = cloudwatch_logs.get_log_events(
-                                logGroupName=log_group_name,
-                                logStreamName=stream_name,
-                                startTime=int(start_time.timestamp() * 1000),
-                                endTime=int(end_time.timestamp() * 1000),
-                                limit=20,
-                            )
-
-                            for event in logs.get("events", []):
-                                timestamp = datetime.datetime.fromtimestamp(
-                                    event["timestamp"] / 1000
-                                )
-                                # API Gateway logs are often quite verbose, so truncate them
-                                message = event["message"][:100] + (
-                                    "..." if len(event["message"]) > 100 else ""
-                                )
-                                logger.info(f"  {timestamp}: {message}")
-
-                except cloudwatch_logs.exceptions.ResourceNotFoundException:
-                    logger.info("API Gateway logging is not enabled or no logs exist")
-            else:
-                logger.info(f"No API Gateway named {API_GATEWAY_NAME} found")
-
-        except Exception as e:
-            logger.error(f"Error retrieving API Gateway logs: {e}")
-
         logger.info("\nHistory retrieval complete.")
+
+
+@staticmethod
+def discover() -> dict:
+    """Discover instances by tag and optionally start them if stopped.
+
+    Returns:
+        dict: Information about the discovered instance including status and connection
+            details
+    """
+    ec2 = boto3.resource("ec2", region_name=config.AWS_REGION)
+
+    # Find instance with project tag
+    instances = list(
+        ec2.instances.filter(
+            Filters=[
+                {"Name": "tag:Name", "Values": [config.PROJECT_NAME]},
+                {
+                    "Name": "instance-state-name",
+                    "Values": ["pending", "running", "stopped"],
+                },
+            ]
+        )
+    )
+
+    if not instances:
+        logger.info("No instances found")
+        return {"status": "not_found"}
+
+    instance = instances[0]  # Get the first matching instance
+    logger.info(f"Found instance {instance.id} in state {instance.state['Name']}")
+
+    # If instance is stopped, start it
+    if instance.state["Name"] == "stopped":
+        logger.info(f"Starting stopped instance {instance.id}")
+        instance.start()
+        return {
+            "instance_id": instance.id,
+            "status": "starting",
+            "message": "Instance is starting. Please try again in a few minutes.",
+        }
+
+    # Return info for running instance
+    if instance.state["Name"] == "running":
+        return {
+            "instance_id": instance.id,
+            "public_ip": instance.public_ip_address,
+            "status": instance.state["Name"],
+            "api_url": f"http://{instance.public_ip_address}:{config.PORT}",
+        }
+
+    # Instance is in another state (e.g., pending)
+    return {
+        "instance_id": instance.id,
+        "status": instance.state["Name"],
+        "message": f"Instance is {instance.state['Name']}. Please try again shortly.",
+    }
 
 
 if __name__ == "__main__":
