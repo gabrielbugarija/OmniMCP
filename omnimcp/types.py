@@ -2,40 +2,48 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any, Literal, Tuple
 
 
-@dataclass
-class Bounds:
-    """Normalized bounds of a UI element (0-1 range)."""
-
-    x: float
-    y: float
-    width: float
-    height: float
+# Define Bounds (assuming normalized coordinates 0.0-1.0)
+Bounds = Tuple[float, float, float, float]  # (x, y, width, height)
 
 
 @dataclass
 class UIElement:
     """Represents a UI element with its properties."""
 
-    type: str  # button, text, slider, etc
-    content: str  # Text or semantic content
-    bounds: Bounds  # Normalized coordinates
-    confidence: float  # Detection confidence
-    attributes: Dict[str, Any] = field(default_factory=dict)
+    id: int  # Unique identifier for referencing
+    type: str  # button, text_field, checkbox, link, text, etc.
+    content: str  # Text content or accessibility label
+    bounds: Bounds  # Normalized coordinates (x, y, width, height)
+    confidence: float = 1.0  # Detection confidence (1.0 for synthetic)
+    attributes: Dict[str, Any] = field(default_factory=dict)  # e.g., {'checked': False}
 
-    def to_dict(self) -> Dict:
-        """Convert to serializable dict."""
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert UIElement to a dictionary."""
         return {
+            "id": self.id,
             "type": self.type,
             "content": self.content,
-            "bounds": {
-                "x": self.bounds.x,
-                "y": self.bounds.y,
-                "width": self.bounds.width,
-                "height": self.bounds.height,
-            },
+            "bounds": self.bounds,
             "confidence": self.confidence,
             "attributes": self.attributes,
         }
+
+    def to_prompt_repr(self) -> str:
+        """Concise representation for LLM prompts."""
+        bound_str = (
+            f"({self.bounds[0]:.2f}, {self.bounds[1]:.2f}, "
+            f"{self.bounds[2]:.2f}, {self.bounds[3]:.2f})"
+        )
+        # Truncate long content
+        content_preview = (
+            (self.content[:30] + "...") if len(self.content) > 33 else self.content
+        )
+        # Avoid newlines in prompt list
+        content_preview = content_preview.replace("\n", " ")
+        return (
+            f"ID: {self.id}, Type: {self.type}, "
+            f"Content: '{content_preview}', Bounds: {bound_str}"
+        )
 
 
 @dataclass
@@ -43,7 +51,7 @@ class ScreenState:
     """Represents the current state of the screen with UI elements."""
 
     elements: List[UIElement]
-    dimensions: Tuple[int, int]
+    dimensions: Tuple[int, int]  # Actual pixel dimensions
     timestamp: float
 
 
