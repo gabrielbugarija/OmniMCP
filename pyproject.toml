@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=42", "wheel"]
+requires = ["setuptools>=77.0.0", "wheel"] # Updated setuptools version for license format
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,8 +7,10 @@ name = "omnimcp"
 version = "0.1.0"
 description = "OmniMCP - OmniParser with Model Control Protocol for UI Automation"
 readme = "README.md"
-requires-python = ">=3.10,<3.12"
-license = {text = "MIT"}
+# Allow <3.13 as upper bound seems reasonable unless specific 3.12+ features are needed
+requires-python = ">=3.10,<3.13"
+# Use SPDX identifier string for license
+license = "MIT"
 authors = [
     {name = "Richard Abrich", email = "richard@openadapt.ai"}
 ]
@@ -23,21 +25,39 @@ dependencies = [
     "requests>=2.31.0", # HTTP requests for OmniParser
     "mss>=6.1.0", # Screen capture
     "jinja2>=3.0.0", # For templating
-    "botocore>=1.37.13",
-    "boto3>=1.37.13",
-    "paramiko>=3.5.1",
+    "botocore>=1.37.13", # Keep if needed for OmniParser deployment utils
+    "boto3>=1.37.13", # Keep if needed for OmniParser deployment utils
+    "paramiko>=3.5.1", # Keep if needed for OmniParser deployment utils
     "pydantic-settings>=2.8.1",
     "numpy>=2.2.4",
-    "pytest>=8.3.5",
+    # pydantic pulled in by pydantic-settings, but explicit is ok
+    "pydantic>=2.10.6",
+    "tenacity>=9.0.0",
+    # Removed pytest and pytest-mock from main dependencies
+    "ruff>=0.11.2",
 ]
 
 [project.scripts]
-omnimcp = "omnimcp.run_omnimcp:main"
+# Keep this if run_omnimcp:main exists and is intended as an entry point
+# omnimcp = "omnimcp.run_omnimcp:main"
 
 [tool.setuptools]
-packages = ["omnimcp", "omnimcp.tests"]
+# Only include the main package source directory
+packages = ["omnimcp"]
 
 [project.optional-dependencies]
 test = [
-    "pytest-asyncio>=0.23.5",
+    "pytest>=8.0.0",
+    "pytest-mock>=3.10.0",
+    "pytest-asyncio>=0.23.5", # Keep if async code/tests are planned
+    # Add other test-specific dependencies here if needed, e.g., coverage
 ]
+
+# Add Ruff configuration if you want to manage it here
+# [tool.ruff]
+# line-length = 88
+# select = ["E", "W", "F", "I", "UP", "B", "C4"]
+# ignore = ["E501"] # example
+
+# [tool.ruff.format]
+# quote-style = "double"

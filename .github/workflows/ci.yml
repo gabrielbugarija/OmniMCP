@@ -1,0 +1,50 @@
+# .github/workflows/ci.yml
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint_and_test:
+    runs-on: ubuntu-latest
+
+    steps:
+      # --- 1. Checkout Repository ---
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # --- 2. Set up Python ---
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # --- 3. Install uv ---
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+      - name: Add uv to PATH
+        run: echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      # --- 4. Create Virtual Environment using uv --- ### ADDED STEP ###
+      - name: Create virtual environment
+        run: uv venv
+
+      # --- 5. Install Dependencies using uv --- ### Should now work ###
+      # uv pip install will now detect and use the .venv directory created above
+      - name: Install dependencies
+        run: uv pip install -e ".[test]"
+
+      # --- 6. Lint and Format Check with Ruff (via uv) ---
+      - name: Lint with Ruff
+        run: uv run ruff check .
+      - name: Check formatting with Ruff
+        run: uv run ruff format --check .
+
+      # --- 7. Run Tests with Pytest (via uv) ---
+      - name: Run tests
+        env:
+          ANTHROPIC_API_KEY: "ci_dummy_key"
+        run: uv run pytest tests/

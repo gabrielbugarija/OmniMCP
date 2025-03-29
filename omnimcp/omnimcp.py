@@ -8,20 +8,16 @@ through screenshots, element detection, and input simulation.
 
 import io
 import time
-from typing import List, Optional, Dict, Any, Literal, Tuple
+from typing import List, Optional, Literal
 
 import numpy as np
 from mcp.server.fastmcp import FastMCP
-from PIL import Image
 from loguru import logger
 
 from omnimcp.omniparser.client import OmniParserProvider
 from omnimcp.utils import (
     take_screenshot,
-    normalize_coordinates,
-    denormalize_coordinates,
     compute_diff,
-    image_to_base64,
     MouseController,
     KeyboardController,
 )
@@ -33,8 +29,6 @@ from omnimcp.types import (
     InteractionResult,
     ScrollResult,
     TypeResult,
-    ToolError,
-    DebugContext,
 )
 from omnimcp.input import InputController
 
@@ -137,15 +131,15 @@ class VisualState:
             )
 
         # Create prompt with element descriptions and screenshot
-        elements_str = "\n".join(element_descriptions)
-        prompt = f"""
-        Find the UI element that best matches this description: "{description}"
-        
-        Available elements:
-        {elements_str}
-        
-        Return ONLY the index number of the best matching element. If no good match exists, return -1.
-        """
+        # elements_str = "\n".join(element_descriptions)
+        # prompt = f"""
+        # Find the UI element that best matches this description: "{description}"
+        #
+        # Available elements:
+        # {elements_str}
+        #
+        # Return ONLY the index number of the best matching element. If no good match exists, return -1.
+        # """
 
         # TODO: Implement Claude API call
         # For now, simulate a response by finding the first partial match
@@ -400,10 +394,10 @@ class OmniMCP:
 
         if element_bounds:
             # Convert normalized bounds to absolute coordinates
-            x = int(element_bounds.x * before_image.width)
-            y = int(element_bounds.y * before_image.height)
-            w = int(element_bounds.width * before_image.width)
-            h = int(element_bounds.height * before_image.height)
+            int(element_bounds.x * before_image.width)
+            int(element_bounds.y * before_image.height)
+            int(element_bounds.width * before_image.width)
+            int(element_bounds.height * before_image.height)
 
             changes_detected.append(element_bounds)
 
