@@ -1,22 +1,24 @@
 # omnimcp/synthetic_ui.py
 import os
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Any
 from PIL import Image, ImageDraw, ImageFont
+import copy  # For deep copying element list
 
 from .types import UIElement, Bounds
-from .utils import logger  # Reuse logger from utils
+from .utils import logger
 
-# Attempt to load a default font, handle potential errors
-try:
-    # Adjust path if needed, or use a system font finder
-    FONT = ImageFont.truetype("arial.ttf", 15)
-except IOError:
-    logger.warning("Arial font not found. Using default PIL font.")
-    FONT = ImageFont.load_default()
-
+# --- Constants and Font ---
 IMG_WIDTH, IMG_HEIGHT = 800, 600
+try:
+    FONT = ImageFont.truetype("arial.ttf", 15)
+    FONT_BOLD = ImageFont.truetype("arialbd.ttf", 20)  # Added bold font
+except IOError:
+    logger.warning("Arial fonts not found. Using default PIL font.")
+    FONT = ImageFont.load_default()
+    FONT_BOLD = ImageFont.load_default()
 
 
+# --- Coordinate Conversion ---
 def _bounds_to_abs(bounds: Bounds) -> Tuple[int, int, int, int]:
     """Convert normalized bounds to absolute pixel coordinates."""
     x, y, w, h = bounds
@@ -27,13 +29,24 @@ def _bounds_to_abs(bounds: Bounds) -> Tuple[int, int, int, int]:
     return abs_x, abs_y, abs_w, abs_h
 
 
+def _abs_to_bounds(abs_coords: Tuple[int, int, int, int]) -> Bounds:
+    """Convert absolute pixel coordinates to normalized bounds."""
+    abs_x, abs_y, abs_w, abs_h = abs_coords
+    x = abs_x / IMG_WIDTH
+    y = abs_y / IMG_HEIGHT
+    w = abs_w / IMG_WIDTH
+    h = abs_h / IMG_HEIGHT
+    return x, y, w, h
+
+
+# --- UI Generation ---
+
+
 def generate_login_screen(
     save_path: str | None = None,
 ) -> Tuple[Image.Image, List[UIElement]]:
-    """Generates a synthetic login screen image and element data."""
-    img = Image.new(
-        "RGB", (IMG_WIDTH, IMG_HEIGHT), color=(230, 230, 230)
-    )  # Light gray background
+    """Generates the initial synthetic login screen image and element data."""
+    img = Image.new("RGB", (IMG_WIDTH, IMG_HEIGHT), color=(230, 230, 230))
     draw = ImageDraw.Draw(img)
     elements: List[UIElement] = []
     element_id_counter = 0
@@ -41,20 +54,13 @@ def generate_login_screen(
     # Title
     title_text = "Welcome Back!"
     title_bbox = draw.textbbox((0, 0), title_text, font=FONT)
-    title_w = title_bbox[2] - title_bbox[0]
-    title_h = title_bbox[3] - title_bbox[1]
-    title_x = (IMG_WIDTH - title_w) / 2
-    title_y = 80
+    title_w, title_h = title_bbox[2] - title_bbox[0], title_bbox[3] - title_bbox[1]
+    title_x, title_y = (IMG_WIDTH - title_w) / 2, 80
     draw.text((title_x, title_y), title_text, fill="black", font=FONT)
-    # Note: Pure text isn't usually an 'element' for interaction, but can be included
-    # elements.append(UIElement(...)) # Optional: Add static text if needed by model
 
     # Username Field
-    uname_label_y = 150
+    uname_label_y, uname_x, uname_w, uname_h = 150, 200, 400, 40
     uname_field_y = uname_label_y + 25
-    uname_x = 200
-    uname_w = 400
-    uname_h = 40
     draw.text((uname_x, uname_label_y), "Username:", fill="black", font=FONT)
     draw.rectangle(
         [(uname_x, uname_field_y), (uname_x + uname_w, uname_field_y + uname_h)],
@@ -65,23 +71,17 @@ def generate_login_screen(
         UIElement(
             id=element_id_counter,
             type="text_field",
-            content="",  # Empty field
-            bounds=(
-                uname_x / IMG_WIDTH,
-                uname_field_y / IMG_HEIGHT,
-                uname_w / IMG_WIDTH,
-                uname_h / IMG_HEIGHT,
-            ),
+            content="",
+            bounds=_abs_to_bounds((uname_x, uname_field_y, uname_w, uname_h)),
+            attributes={"label": "Username:"},  # Store label for potential use
         )
     )
     element_id_counter += 1
 
     # Password Field
     pw_label_y = uname_field_y + uname_h + 20
+    pw_x, pw_w, pw_h = 200, 400, 40
     pw_field_y = pw_label_y + 25
-    pw_x = 200
-    pw_w = 400
-    pw_h = 40
     draw.text((pw_x, pw_label_y), "Password:", fill="black", font=FONT)
     draw.rectangle(
         [(pw_x, pw_field_y), (pw_x + pw_w, pw_field_y + pw_h)],
@@ -92,22 +92,16 @@ def generate_login_screen(
         UIElement(
             id=element_id_counter,
             type="text_field",
-            content="",  # Empty field, often masked
-            bounds=(
-                pw_x / IMG_WIDTH,
-                pw_field_y / IMG_HEIGHT,
-                pw_w / IMG_WIDTH,
-                pw_h / IMG_HEIGHT,
-            ),
-            attributes={"is_password": True},
+            content="",
+            bounds=_abs_to_bounds((pw_x, pw_field_y, pw_w, pw_h)),
+            attributes={"is_password": True, "label": "Password:"},
         )
     )
     element_id_counter += 1
 
     # Remember Me Checkbox
     cb_y = pw_field_y + pw_h + 30
-    cb_x = 200
-    cb_size = 20
+    cb_x, cb_size = 200, 20
     cb_text_x = cb_x + cb_size + 10
     draw.rectangle(
         [(cb_x, cb_y), (cb_x + cb_size, cb_y + cb_size)], fill="white", outline="black"
@@ -118,12 +112,7 @@ def generate_login_screen(
             id=element_id_counter,
             type="checkbox",
             content="Remember Me",
-            bounds=(
-                cb_x / IMG_WIDTH,
-                cb_y / IMG_HEIGHT,
-                cb_size / IMG_WIDTH,
-                cb_size / IMG_HEIGHT,
-            ),
+            bounds=_abs_to_bounds((cb_x, cb_y, cb_size, cb_size)),
             attributes={"checked": False},
         )
     )
@@ -132,38 +121,29 @@ def generate_login_screen(
     # Forgot Password Link
     fp_text = "Forgot Password?"
     fp_bbox = draw.textbbox((0, 0), fp_text, font=FONT)
-    fp_w = fp_bbox[2] - fp_bbox[0]
-    fp_h = fp_bbox[3] - fp_bbox[1]
-    fp_x = pw_x + pw_w - fp_w  # Align right
-    fp_y = cb_y + 5  # Align with checkbox text
+    fp_w, fp_h = fp_bbox[2] - fp_bbox[0], fp_bbox[3] - fp_bbox[1]
+    fp_x, fp_y = pw_x + pw_w - fp_w, cb_y + 5
     draw.text((fp_x, fp_y), fp_text, fill="blue", font=FONT)
     elements.append(
         UIElement(
             id=element_id_counter,
             type="link",
             content="Forgot Password?",
-            bounds=(
-                fp_x / IMG_WIDTH,
-                fp_y / IMG_HEIGHT,
-                fp_w / IMG_WIDTH,
-                fp_h / IMG_HEIGHT,
-            ),
+            bounds=_abs_to_bounds((fp_x, fp_y, fp_w, fp_h)),
         )
     )
     element_id_counter += 1
 
     # Login Button
     btn_y = cb_y + cb_size + 40
-    btn_w = 120
-    btn_h = 45
+    btn_w, btn_h = 120, 45
     btn_x = (IMG_WIDTH - btn_w) / 2
     draw.rectangle(
         [(btn_x, btn_y), (btn_x + btn_w, btn_y + btn_h)], fill="green", outline="black"
     )
     btn_text = "Login"
     btn_bbox = draw.textbbox((0, 0), btn_text, font=FONT)
-    btn_text_w = btn_bbox[2] - btn_bbox[0]
-    btn_text_h = btn_bbox[3] - btn_bbox[1]
+    btn_text_w, btn_text_h = btn_bbox[2] - btn_bbox[0], btn_bbox[3] - btn_bbox[1]
     draw.text(
         (btn_x + (btn_w - btn_text_w) / 2, btn_y + (btn_h - btn_text_h) / 2),
         btn_text,
@@ -175,12 +155,7 @@ def generate_login_screen(
             id=element_id_counter,
             type="button",
             content="Login",
-            bounds=(
-                btn_x / IMG_WIDTH,
-                btn_y / IMG_HEIGHT,
-                btn_w / IMG_WIDTH,
-                btn_h / IMG_HEIGHT,
-            ),
+            bounds=_abs_to_bounds((btn_x, btn_y, btn_w, btn_h)),
         )
     )
     element_id_counter += 1
@@ -193,26 +168,252 @@ def generate_login_screen(
     return img, elements
 
 
+def generate_logged_in_screen(
+    username: str, save_path: str | None = None
+) -> Tuple[Image.Image, List[UIElement]]:
+    """Generates a simple 'logged in' screen."""
+    img = Image.new(
+        "RGB", (IMG_WIDTH, IMG_HEIGHT), color=(210, 230, 210)
+    )  # Light green background
+    draw = ImageDraw.Draw(img)
+    elements: List[UIElement] = []
+    element_id_counter = 0  # Start fresh IDs for new screen state
+
+    # Welcome Message
+    welcome_text = f"Welcome, {username}!"
+    welcome_bbox = draw.textbbox((0, 0), welcome_text, font=FONT_BOLD)
+    welcome_w, welcome_h = (
+        welcome_bbox[2] - welcome_bbox[0],
+        welcome_bbox[3] - welcome_bbox[1],
+    )
+    welcome_x, welcome_y = (IMG_WIDTH - welcome_w) / 2, 200
+    draw.text((welcome_x, welcome_y), welcome_text, fill="darkgreen", font=FONT_BOLD)
+    elements.append(
+        UIElement(
+            id=element_id_counter,
+            type="text",
+            content=welcome_text,
+            bounds=_abs_to_bounds(
+                (int(welcome_x), int(welcome_y), welcome_w, welcome_h)
+            ),
+            attributes={"is_heading": True},
+        )
+    )
+    element_id_counter += 1
+
+    # Logout Button
+    btn_y = welcome_y + welcome_h + 50
+    btn_w, btn_h = 120, 45
+    btn_x = (IMG_WIDTH - btn_w) / 2
+    draw.rectangle(
+        [(btn_x, btn_y), (btn_x + btn_w, btn_y + btn_h)], fill="orange", outline="black"
+    )
+    btn_text = "Logout"
+    btn_bbox = draw.textbbox((0, 0), btn_text, font=FONT)
+    btn_text_w, btn_text_h = btn_bbox[2] - btn_bbox[0], btn_bbox[3] - btn_bbox[1]
+    draw.text(
+        (btn_x + (btn_w - btn_text_w) / 2, btn_y + (btn_h - btn_text_h) / 2),
+        btn_text,
+        fill="black",
+        font=FONT,
+    )
+    elements.append(
+        UIElement(
+            id=element_id_counter,
+            type="button",
+            content="Logout",
+            bounds=_abs_to_bounds((int(btn_x), int(btn_y), btn_w, btn_h)),
+        )
+    )
+    element_id_counter += 1
+
+    if save_path:
+        os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
+        img.save(save_path)
+        logger.info(f"Saved 'Logged In' screen to {save_path}")
+
+    return img, elements
+
+
+# --- Simulation Logic ---
+
+
+def simulate_action(
+    image: Image.Image,
+    elements: List[UIElement],
+    plan: Any,  # Using Any to avoid circular import with core.py/LLMActionPlan
+    username_for_login: str = "User",  # Default username for welcome screen
+) -> Tuple[Image.Image, List[UIElement]]:
+    """
+    Simulates the effect of a planned action on the synthetic UI state.
+
+    Args:
+        image: The current PIL Image.
+        elements: The current list of UIElements.
+        plan: The LLMActionPlan object for the action to simulate.
+        username_for_login: Username to display on successful login screen.
+
+    Returns:
+        A tuple containing the new (PIL Image, List[UIElement]) after simulation.
+        Returns the original state if action cannot be simulated.
+    """
+    logger.debug(f"Simulating action: {plan.action} on element {plan.element_id}")
+    new_image = image.copy()
+    # IMPORTANT: Deep copy elements to avoid modifying previous steps' state
+    new_elements = copy.deepcopy(elements)
+    draw = ImageDraw.Draw(new_image)
+
+    target_element = next((el for el in new_elements if el.id == plan.element_id), None)
+
+    if not target_element:
+        logger.warning(f"Simulation failed: Element ID {plan.element_id} not found.")
+        return image, elements  # Return original state
+
+    action = plan.action
+    element_type = target_element.type
+
+    try:
+        # --- Simulate TYPE action ---
+        if action == "type":
+            if element_type == "text_field" and plan.text_to_type is not None:
+                text_to_draw = plan.text_to_type
+                target_element.content = text_to_draw  # Update element data
+                abs_x, abs_y, abs_w, abs_h = _bounds_to_abs(target_element.bounds)
+
+                # Mask password text for drawing
+                if target_element.attributes.get("is_password"):
+                    text_to_draw = "*" * len(text_to_draw)
+
+                # Erase previous content by drawing background color
+                draw.rectangle(
+                    [(abs_x, abs_y), (abs_x + abs_w, abs_y + abs_h)],
+                    fill="white",
+                    outline="black",
+                )
+                # Draw new text (vertically centered)
+                text_bbox = draw.textbbox((0, 0), text_to_draw, font=FONT)
+                text_h = text_bbox[3] - text_bbox[1]
+                draw.text(
+                    (abs_x + 5, abs_y + (abs_h - text_h) / 2),
+                    text_to_draw,
+                    fill="black",
+                    font=FONT,
+                )
+                logger.info(
+                    f"Simulated typing '{plan.text_to_type}' into element {target_element.id}"
+                )
+                return new_image, new_elements
+            else:
+                logger.warning(
+                    f"Cannot simulate 'type' on element type '{element_type}' or missing text."
+                )
+                return image, elements
+
+        # --- Simulate CLICK action ---
+        elif action == "click":
+            # Click on Login Button
+            if element_type == "button" and target_element.content == "Login":
+                # Basic check: assume login succeeds if both fields have content
+                username_filled = any(el.id == 0 and el.content for el in new_elements)
+                password_filled = any(el.id == 1 and el.content for el in new_elements)
+                if username_filled and password_filled:
+                    logger.info("Simulating successful login transition.")
+                    # Transition to logged-in screen
+                    # Get username from element 0 content for personalization
+                    login_username = next(
+                        (el.content for el in new_elements if el.id == 0),
+                        username_for_login,
+                    )
+                    return generate_logged_in_screen(
+                        username=login_username
+                    )  # Return new screen state
+                else:
+                    logger.warning(
+                        "Simulating login click, but fields not filled. No state change."
+                    )
+                    # Optionally: Add an error message element to the current screen
+                    return image, elements  # No state change if fields empty
+
+            # Click on Checkbox
+            elif element_type == "checkbox":
+                is_checked = target_element.attributes.get("checked", False)
+                target_element.attributes["checked"] = not is_checked  # Toggle state
+                abs_x, abs_y, abs_w, abs_h = _bounds_to_abs(target_element.bounds)
+                # Re-draw checkbox
+                draw.rectangle(
+                    [(abs_x, abs_y), (abs_x + abs_w, abs_y + abs_h)],
+                    fill="white",
+                    outline="black",
+                )
+                if not is_checked:  # Draw checkmark if it's now checked
+                    draw.line(
+                        [
+                            (abs_x + 2, abs_y + abs_h // 2),
+                            (abs_x + abs_w // 2, abs_y + abs_h - 2),
+                        ],
+                        fill="black",
+                        width=2,
+                    )
+                    draw.line(
+                        [
+                            (abs_x + abs_w // 2, abs_y + abs_h - 2),
+                            (abs_x + abs_w - 2, abs_y + 2),
+                        ],
+                        fill="black",
+                        width=2,
+                    )
+                logger.info(
+                    f"Simulated clicking checkbox {target_element.id}. New state: checked={not is_checked}"
+                )
+                return new_image, new_elements
+
+            # Click on Link / Other Buttons (add more simulation logic here if needed)
+            elif (
+                element_type == "link" and target_element.content == "Forgot Password?"
+            ):
+                logger.info(
+                    "Simulated clicking 'Forgot Password?' link. (No visual state change implemented)."
+                )
+                # Could transition to another screen if desired
+                return image, elements  # No state change for now
+
+            else:
+                logger.warning(
+                    f"Simulation for clicking element type '{element_type}' with content '{target_element.content}' not fully implemented."
+                )
+                return image, elements  # No change if click simulation not defined
+        else:
+            logger.warning(f"Action type '{action}' simulation not implemented.")
+            return image, elements  # Return original state if action unknown
+
+    except Exception as e:
+        logger.error(f"Error during simulation: {e}", exc_info=True)
+        return image, elements  # Return original state on error
+
+
+# --- Visualization ---
+
+
 def draw_highlight(
     image: Image.Image, element: UIElement, color: str = "red", width: int = 3
 ) -> Image.Image:
     """Draws a highlight box around the specified element on the image."""
+    # Ensure element is valid
+    if not element or not hasattr(element, "bounds"):
+        logger.warning("Attempted to draw highlight for invalid element.")
+        return image.copy()  # Return copy without highlight
+
     img_copy = image.copy()
     draw = ImageDraw.Draw(img_copy)
-    abs_x, abs_y, abs_w, abs_h = _bounds_to_abs(element.bounds)
-
-    # Draw rectangle outline
-    draw.rectangle(
-        [(abs_x, abs_y), (abs_x + abs_w, abs_y + abs_h)], outline=color, width=width
-    )
+    try:
+        abs_x, abs_y, abs_w, abs_h = _bounds_to_abs(element.bounds)
+        draw.rectangle(
+            [(abs_x, abs_y), (abs_x + abs_w, abs_y + abs_h)], outline=color, width=width
+        )
+    except Exception as e:
+        logger.error(
+            f"Failed to draw highlight for element {getattr(element, 'id', 'N/A')}: {e}"
+        )
+        # Return original copy if drawing fails
+        return image.copy()
     return img_copy
-
-
-# Note: The idea of LLM generating PIL code for screenshots is interesting but complex.
-# Adding LLM-based generation would require:
-# 1. A prompt asking the LLM to write Python PIL code based on a description.
-# 2. Secure execution of the generated code (e.g., using restricted execution
-#    environments).
-# 3. Parsing the output (the image and potentially element data if the LLM generates
-#    it).
-# This adds multiple points of failure and significant development time.

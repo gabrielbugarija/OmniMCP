@@ -1,8 +1,6 @@
 # omnimcp/core.py
 from typing import List, Tuple, Literal
 from PIL import Image
-
-# Corrected Pydantic import
 from pydantic import BaseModel, Field, field_validator, ValidationInfo
 
 from .types import UIElement
@@ -30,34 +28,41 @@ class LLMActionPlan(BaseModel):
         None,
         description="The text to type into the element, ONLY if the action is 'type'.",
     )
+    is_goal_complete: bool = Field(
+        ...,
+        description="Set to true if the user's overall goal is fully achieved given the current UI state, otherwise false.",
+    )  # New field
 
-    # Example validation using the imported decorator and ValidationInfo
     @field_validator("text_to_type")
     def check_text_to_type(cls, v: str | None, info: ValidationInfo) -> str | None:
-        # info.data contains the model fields already processed
         if info.data.get("action") == "type" and v is None:
-            logger.warning(
-                "Action is 'type' but 'text_to_type' is missing. LLM might need better prompting."
-            )
-            # Depending on strictness, you could raise ValueError here
+            logger.warning("Action is 'type' but 'text_to_type' is missing.")
         elif info.data.get("action") != "type" and v is not None:
             logger.warning(
-                f"Action is '{info.data.get('action')}' but 'text_to_type' was provided. Will be ignored by most actions."
+                f"Action is '{info.data.get('action')}' but 'text_to_type' was provided."
             )
-            # Depending on strictness, you could set v to None or raise ValueError
         return v
 
 
 # --- Prompt Template ---
 
 PROMPT_TEMPLATE = """
-You are an expert UI automation assistant. Your task is to determine the next best action to take on a user interface (UI) to achieve a given user goal.
+You are an expert UI automation assistant. Your task is to determine the single next best action to take on a user interface (UI) to achieve a given user goal, and assess if the goal is already complete.
 
 **User Goal:**
 {{ user_goal }}
 
+**Previous Actions Taken:**
+{% if action_history %}
+{% for action_desc in action_history %}
+- {{ action_desc }}
+{% endfor %}
+{% else %}
+- None
+{% endif %}
+
 **Current UI Elements:**
-Here is a list of UI elements currently visible on the screen. Each element has an ID, type, content (text label or value), and location (bounds).
+Here is a list of UI elements currently visible on the screen.
 
 ```
 {% for element in elements %}
@@ -66,22 +71,20 @@ Here is a list of UI elements currently visible on the screen. Each element has 
 ```
 
 **Instructions:**
-1.  **Analyze:** Carefully review the user goal and the available UI elements.
-2.  **Reason:** Think step-by-step (provide your reasoning in the `reasoning` field) about how to progress towards the user goal using one of the available elements. Consider the element types and content.
-    * If the goal involves entering text (e.g., "log in with username 'test'"), identify the correct text field and specify the text to type.
-    * If the goal involves clicking a button (e.g., "submit the form"), identify the correct button.
-    * If the goal involves selecting an option (e.g., "check the remember me box"), identify the checkbox or radio button.
-3.  **Select Action:** Choose the single most appropriate action from: "click", "type", "scroll".
-4.  **Select Element:** Identify the `ID` of the single UI element that should be targeted for this action.
-5.  **Specify Text (if typing):** If the action is "type", provide the exact text to be typed in the `text_to_type` field. Otherwise, leave it null.
-6.  **Format Output:** Respond ONLY with a valid JSON object matching the following structure. Do NOT include any text outside the JSON block.
+1.  **Analyze:** Review the user goal, previous actions, and the current UI elements.
+2.  **Check Completion:** Based ONLY on the current UI elements, determine if the original user goal has already been fully achieved. Set `is_goal_complete` accordingly (true/false).
+3.  **Reason (if goal not complete):** If the goal is not complete, think step-by-step (in the `reasoning` field) about the single best *next* action to progress towards the goal. Consider the element types, content, and previous actions.
+4.  **Select Action & Element (if goal not complete):** Choose the most appropriate action ("click", "type", "scroll") and the `ID` of the target UI element for that single next step. If the goal is already complete, you can choose a dummy action like 'click' on a harmless element (e.g., static text if available, or ID 0) or default to 'click' ID 0, but focus on setting `is_goal_complete` correctly.
+5.  **Specify Text (if typing):** If the action is "type", provide the exact text in `text_to_type`. Otherwise, leave it null.
+6.  **Format Output:** Respond ONLY with a valid JSON object matching the structure below.
 
 ```json
 {
   "reasoning": "Your step-by-step thinking process here...",
   "action": "click | type | scroll",
   "element_id": <ID of the target element>,
-  "text_to_type": "<text to enter if action is type, otherwise null>"
+  "text_to_type": "<text to enter if action is type, otherwise null>",
+  "is_goal_complete": true | false
 }
 ```
 """
@@ -90,65 +93,47 @@ Here is a list of UI elements currently visible on the screen. Each element has 
 
 
 def plan_action_for_ui(
-    elements: List[UIElement], user_goal: str
+    elements: List[UIElement],
+    user_goal: str,
+    action_history: List[str] | None = None,  # Add action history parameter
 ) -> Tuple[LLMActionPlan, UIElement | None]:
     """
-    Uses an LLM to plan the next UI action based on elements and a goal.
-
-    Args:
-        elements: List of UIElement objects detected on the screen.
-        user_goal: The natural language goal provided by the user.
-
-    Returns:
-        A tuple containing:
-        - The LLMActionPlan (parsed Pydantic model).
-        - The targeted UIElement object, or None if the ID is invalid.
+    Uses an LLM to plan the next UI action based on elements, goal, and history.
     """
+    action_history = action_history or []
     logger.info(
-        f"Planning action for goal: '{user_goal}' with {len(elements)} elements."
+        f"Planning action for goal: '{user_goal}' with {len(elements)} elements. History: {len(action_history)} steps."
     )
 
-    # Prepare the prompt
-    prompt = render_prompt(PROMPT_TEMPLATE, user_goal=user_goal, elements=elements)
+    prompt = render_prompt(
+        PROMPT_TEMPLATE,
+        user_goal=user_goal,
+        elements=elements,
+        action_history=action_history,  # Pass history to template
+    )
 
-    # Define the messages for the LLM API
-    # Use "system" prompt for overall instructions, "user" for specific request
-    # (Anthropic recommends system prompts for instructions)
     system_prompt = "You are an AI assistant. Respond ONLY with valid JSON that conforms to the provided structure. Do not include any explanatory text before or after the JSON block."
     messages = [{"role": "user", "content": prompt}]
 
-    # Call the LLM API with structured output expectation
     try:
-        # Pass system prompt separately if supported or prepend to user message if not
-        llm_plan = call_llm_api(
-            messages, LLMActionPlan, system_prompt=system_prompt
-        )  # Assuming call_llm_api handles system prompt
-    except (ValueError, Exception) as e:  # Broader catch for API errors too now
+        llm_plan = call_llm_api(messages, LLMActionPlan, system_prompt=system_prompt)
+    except (ValueError, Exception) as e:
         logger.error(f"Failed to get valid action plan from LLM: {e}")
-        raise  # Reraise for demo purposes
+        raise
 
-    # Find the target element from the list using the ID from the plan
+    # Find the target element even if goal is complete, might be needed for logging/dummy actions
     target_element = next((el for el in elements if el.id == llm_plan.element_id), None)
 
-    if target_element:
+    if llm_plan.is_goal_complete:
+        logger.info("LLM determined the goal is complete.")
+    elif target_element:
         logger.info(
             f"LLM planned action: '{llm_plan.action}' on element ID {llm_plan.element_id} ('{target_element.content}')"
         )
     else:
+        # Log warning if goal is not complete but element ID is invalid
         logger.warning(
             f"LLM planned action on element ID {llm_plan.element_id}, but no such element was found in the input list."
         )
 
     return llm_plan, target_element
-
-
-# Small adjustment in call_llm_api might be needed if it doesn't take system_prompt kwarg
-# In completions.py, adjust call_llm_api if necessary:
-# def call_llm_api(..., system_prompt: str | None = None):
-#    ...
-#    response = client.messages.create(
-#        ...,
-#        system=system_prompt, # Add this line
-#        messages=messages,
-#        ...
-#    )
