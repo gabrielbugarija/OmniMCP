@@ -26,14 +26,15 @@ dependencies = [
     "mss>=6.1.0", # Screen capture
     "jinja2>=3.0.0", # For templating
     "botocore>=1.37.13", # Keep if needed for OmniParser deployment utils
-    "boto3>=1.37.13",    # Keep if needed for OmniParser deployment utils
-    "paramiko>=3.5.1",   # Keep if needed for OmniParser deployment utils
+    "boto3>=1.37.13", # Keep if needed for OmniParser deployment utils
+    "paramiko>=3.5.1", # Keep if needed for OmniParser deployment utils
     "pydantic-settings>=2.8.1",
     "numpy>=2.2.4",
     # pydantic pulled in by pydantic-settings, but explicit is ok
     "pydantic>=2.10.6",
     "tenacity>=9.0.0",
     # Removed pytest and pytest-mock from main dependencies
+    "ruff>=0.11.2",
 ]
 
 [project.scripts]
