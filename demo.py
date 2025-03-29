@@ -79,12 +79,20 @@ def run_multi_step_demo():
 
             # 4. Visualize Planned Action (for the action planned in this step)
             highlight_img_path = os.path.join(OUTPUT_DIR, f"step_{step}_highlight.png")
+            # Pass the llm_plan to the draw_highlight function
             highlighted_image = draw_highlight(
-                image, target_element, color="lime", width=4
+                image,
+                target_element,
+                plan=llm_plan,  # Pass the plan object here
+                color="lime",
+                width=4,
+                dim_factor=0.5,  # Adjust dimming if needed
             )
             if SAVE_IMAGES:
                 highlighted_image.save(highlight_img_path)
-                logger.info(f"Saved highlighted action to {highlight_img_path}")
+                logger.info(
+                    f"Saved highlighted action with text to {highlight_img_path}"
+                )
             # else: highlighted_image.show(title=f"Step {step+1} - Action Target")
 
             # Record action for history *before* simulation changes state

@@ -1,7 +1,7 @@
 # omnimcp/synthetic_ui.py
 import os
 from typing import List, Tuple, Dict, Any
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageEnhance
 import copy  # For deep copying element list
 
 from .types import UIElement, Bounds
@@ -395,25 +395,134 @@ def simulate_action(
 
 
 def draw_highlight(
-    image: Image.Image, element: UIElement, color: str = "red", width: int = 3
+    image: Image.Image,
+    element: UIElement,
+    plan: Any,  # Add plan object (can use 'LLMActionPlan' if imported or from typing import Any)
+    color: str = "lime",
+    width: int = 3,
+    dim_factor: float = 0.5,
+    text_color: str = "black",  # Color for annotation text
+    text_bg_color: Tuple[int, int, int, int] = (
+        255,
+        255,
+        255,
+        200,
+    ),  # Semi-transparent white bg for text
 ) -> Image.Image:
-    """Draws a highlight box around the specified element on the image."""
-    # Ensure element is valid
-    if not element or not hasattr(element, "bounds"):
-        logger.warning("Attempted to draw highlight for invalid element.")
-        return image.copy()  # Return copy without highlight
+    """
+    Draws highlight box, dims background, and adds text annotation for the planned action.
 
-    img_copy = image.copy()
-    draw = ImageDraw.Draw(img_copy)
+    Args:
+        image: The source PIL Image.
+        element: The UIElement to highlight.
+        plan: The LLMActionPlan object containing the planned action details.
+        color: The color of the highlight box.
+        width: The line width of the highlight box.
+        dim_factor: Factor to reduce brightness of non-highlighted areas.
+        text_color: Color for the annotation text.
+        text_bg_color: Background color for the annotation text.
+
+    Returns:
+        A new PIL Image with the effects.
+    """
+    if not element or not hasattr(element, "bounds") or not plan:
+        logger.warning(
+            "Attempted to draw highlight/text for invalid element or missing plan."
+        )
+        return image.copy()
+
+    final_image = image.copy()
+
     try:
         abs_x, abs_y, abs_w, abs_h = _bounds_to_abs(element.bounds)
+        element_box = (abs_x, abs_y, abs_x + abs_w, abs_y + abs_h)
+
+        # --- Apply Dimming ---
+        if 0.0 <= dim_factor < 1.0:
+            enhancer = ImageEnhance.Brightness(final_image)
+            dimmed_image = enhancer.enhance(dim_factor)
+            crop_box = (
+                max(0, element_box[0]),
+                max(0, element_box[1]),
+                min(image.width, element_box[2]),
+                min(image.height, element_box[3]),
+            )
+            if crop_box[0] < crop_box[2] and crop_box[1] < crop_box[3]:
+                original_element_area = image.crop(crop_box)
+                dimmed_image.paste(original_element_area, (crop_box[0], crop_box[1]))
+                final_image = dimmed_image
+            else:
+                logger.warning(
+                    f"Invalid crop box {crop_box} for element {element.id}. Skipping paste."
+                )
+                final_image = dimmed_image
+
+        # --- Draw Highlight Box ---
+        draw = ImageDraw.Draw(final_image)
         draw.rectangle(
-            [(abs_x, abs_y), (abs_x + abs_w, abs_y + abs_h)], outline=color, width=width
+            [(element_box[0], element_box[1]), (element_box[2], element_box[3])],
+            outline=color,
+            width=width,
         )
+
+        # --- Add Text Annotation ---
+        try:
+            # Construct text based on plan
+            action_text = str(plan.action).capitalize()
+            if plan.action == "type" and plan.text_to_type is not None:
+                # Truncate long text for display
+                text_preview = (
+                    (plan.text_to_type[:20] + "...")
+                    if len(plan.text_to_type) > 23
+                    else plan.text_to_type
+                )
+                annotation_text = f"Next: {action_text} '{text_preview}'"
+            else:
+                annotation_text = f"Next: {action_text}"
+                # Optionally add element content:
+                # content_preview = (element.content[:15] + '...') if len(element.content) > 18 else element.content
+                # if content_preview: annotation_text += f" '{content_preview}'"
+
+            # Calculate text position (prefer placing above the box)
+            margin = 5
+            text_bbox = draw.textbbox((0, 0), annotation_text, font=FONT)
+            text_width = text_bbox[2] - text_bbox[0]
+            text_height = text_bbox[3] - text_bbox[1]
+
+            # Center horizontally above box, clamp to image bounds
+            text_x = max(
+                margin,
+                min(
+                    abs_x + (abs_w - text_width) // 2,
+                    image.width - text_width - margin,  # Ensure right edge fits
+                ),
+            )
+            # Position above box, clamp to image bounds (top edge)
+            text_y = max(margin, abs_y - text_height - margin)
+
+            # Optional: Draw background rectangle for text readability
+            bg_x0 = text_x - margin // 2
+            bg_y0 = text_y - margin // 2
+            bg_x1 = text_x + text_width + margin // 2
+            bg_y1 = text_y + text_height + margin // 2
+            # Ensure background rect is within image bounds
+            bg_x0, bg_y0 = max(0, bg_x0), max(0, bg_y0)
+            bg_x1, bg_y1 = min(final_image.width, bg_x1), min(final_image.height, bg_y1)
+            if bg_x0 < bg_x1 and bg_y0 < bg_y1:  # Draw only if valid rect
+                draw.rectangle([(bg_x0, bg_y0), (bg_x1, bg_y1)], fill=text_bg_color)
+
+            # Draw the text
+            draw.text((text_x, text_y), annotation_text, fill=text_color, font=FONT)
+
+        except Exception as text_e:
+            logger.warning(f"Failed to draw text annotation: {text_e}")
+        # --- End Text Annotation ---
+
     except Exception as e:
         logger.error(
-            f"Failed to draw highlight for element {getattr(element, 'id', 'N/A')}: {e}"
+            f"Failed during drawing highlight/dimming/text for element {getattr(element, 'id', 'N/A')}: {e}",
+            exc_info=True,
         )
-        # Return original copy if drawing fails
         return image.copy()
-    return img_copy
+
+    return final_image
