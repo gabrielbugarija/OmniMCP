@@ -1,6 +1,6 @@
 # omnimcp/synthetic_ui.py
 import os
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Any
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance
 import copy  # For deep copying element list
 
@@ -54,7 +54,7 @@ def generate_login_screen(
     # Title
     title_text = "Welcome Back!"
     title_bbox = draw.textbbox((0, 0), title_text, font=FONT)
-    title_w, title_h = title_bbox[2] - title_bbox[0], title_bbox[3] - title_bbox[1]
+    title_w, _title_h = title_bbox[2] - title_bbox[0], title_bbox[3] - title_bbox[1]
     title_x, title_y = (IMG_WIDTH - title_w) / 2, 80
     draw.text((title_x, title_y), title_text, fill="black", font=FONT)
 

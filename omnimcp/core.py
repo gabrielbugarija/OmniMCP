@@ -1,11 +1,10 @@
 # omnimcp/core.py
 from typing import List, Tuple, Literal
-from PIL import Image
 from pydantic import BaseModel, Field, field_validator, ValidationInfo
 
 from .types import UIElement
 from .utils import render_prompt, logger
-from .completions import call_llm_api, T  # Import TypeVar T
+from .completions import call_llm_api  # Import TypeVar T
 
 # --- Pydantic Schema for LLM Output ---
 

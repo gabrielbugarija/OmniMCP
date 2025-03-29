@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any, Literal, Tuple
+from typing import List, Optional, Dict, Any, Tuple
 
 
 # Define Bounds (assuming normalized coordinates 0.0-1.0)

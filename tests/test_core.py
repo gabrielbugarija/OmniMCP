@@ -1,11 +1,9 @@
 # tests/test_core.py
 import pytest
-from unittest.mock import MagicMock, patch
 
 # Assuming imports work based on installation/path
-from omnimcp.core import plan_action_for_ui, LLMActionPlan, PROMPT_TEMPLATE
+from omnimcp.core import plan_action_for_ui, LLMActionPlan
 from omnimcp.types import UIElement, Bounds
-from omnimcp.utils import render_prompt  # For checking prompt content
 
 # --- Fixture for Sample Elements ---
 

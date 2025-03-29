@@ -8,8 +8,7 @@ from omnimcp.synthetic_ui import (
     generate_login_screen,
     generate_logged_in_screen,
     simulate_action,
-    draw_highlight,
-    _bounds_to_abs,  # Test a utility if desired
+    draw_highlight,  # Test a utility if desired
 )
 from omnimcp.types import UIElement
 

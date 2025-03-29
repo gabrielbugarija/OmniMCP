@@ -2,7 +2,7 @@
 
 from functools import wraps
 from io import BytesIO
-from typing import Any, Callable, Optional, Tuple, Union
+from typing import Any, Callable, Tuple, Union
 import base64
 import threading
 import time

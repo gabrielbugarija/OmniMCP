@@ -121,7 +121,7 @@ def call_llm_api(
                 f"LLM response did not match the expected format: {e}"
             ) from e
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to decode LLM response as JSON.")
+            logger.error("Failed to decode LLM response as JSON.")
             logger.error(f"Raw response was: {response_text}")
             raise ValueError(f"LLM response was not valid JSON: {e}") from e
 
