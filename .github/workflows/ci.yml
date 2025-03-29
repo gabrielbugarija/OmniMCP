@@ -1,0 +1,53 @@
+# .github/workflows/ci.yml
+name: CI
+
+# Controls when the workflow will run
+on:
+  push:
+    branches: [ main ] # Or your default branch name
+  pull_request:
+    branches: [ main ] # Or your default branch name
+
+jobs:
+  lint_and_test:
+    runs-on: ubuntu-latest
+
+    steps:
+      # --- 1. Checkout Repository ---
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # --- 2. Set up Python ---
+      # Match the Python version specified in your pyproject.toml
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # --- 3. Install uv ---
+      # Recommended way to install uv in CI
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+      - name: Add uv to PATH
+        run: echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      # --- 4. Install Dependencies using uv ---
+      # Creates a virtual environment and installs dependencies including test extras
+      # Assumes you have defined [project.optional-dependencies.test] in pyproject.toml
+      - name: Install dependencies
+        run: uv pip install -e ".[test]"
+
+      # --- 5. Lint and Format Check with Ruff (via uv) ---
+      - name: Lint with Ruff
+        run: uv run ruff check .
+      - name: Check formatting with Ruff
+        run: uv run ruff format --check .
+
+      # --- 6. Run Tests with Pytest (via uv) ---
+      # Set a dummy API key env var if your code checks for its presence at import time,
+      # even if the tests mock the actual API calls.
+      - name: Run tests
+        env:
+          ANTHROPIC_API_KEY: "ci_dummy_key" # Value doesn't matter for mocked tests
+          # Add other required env vars if needed, using secrets for real keys if necessary
+        run: uv run pytest tests/ # Explicitly point to tests directory
