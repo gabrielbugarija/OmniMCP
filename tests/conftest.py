@@ -2,15 +2,7 @@
 
 """Pytest configuration for OmniMCP tests."""
 
-import sys
-import os
-
-# Add the 'tests' directory to the Python path for imports within tests
-TESTS_DIR = os.path.dirname(__file__)
-if TESTS_DIR not in sys.path:
-    sys.path.insert(0, TESTS_DIR)
-
-import pytest  # noqa
+import pytest
 
 
 def pytest_configure(config):
