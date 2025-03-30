@@ -74,9 +74,9 @@ class TestParserDeployment:
 
         # Verify cleanup
         final_instances = get_running_parser_instances()
-        assert len(final_instances) <= len(
-            cls.initial_instances
-        ), "Not all test instances were cleaned up"
+        assert len(final_instances) <= len(cls.initial_instances), (
+            "Not all test instances were cleaned up"
+        )
 
     @pytest.mark.skipif(
         condition=lambda: len(get_running_parser_instances()) > 0,
@@ -95,9 +95,9 @@ class TestParserDeployment:
 
         # Verify deployment
         running_instances = get_running_parser_instances()
-        assert (
-            len(running_instances) == 1
-        ), f"Expected 1 running instance, found {len(running_instances)}"
+        assert len(running_instances) == 1, (
+            f"Expected 1 running instance, found {len(running_instances)}"
+        )
 
         # Verify result
         assert result is not None, "Parse result should not be None"
@@ -127,9 +127,9 @@ class TestParserDeployment:
 
         # Verify no new instances were created
         current_instances = get_running_parser_instances()
-        assert len(current_instances) == len(
-            running_instances
-        ), "Number of running instances changed"
+        assert len(current_instances) == len(running_instances), (
+            "Number of running instances changed"
+        )
 
         # Verify result
         assert result is not None, "Parse result should not be None"
@@ -150,9 +150,9 @@ class TestParserDeployment:
             time.sleep(5)
 
             current_instances = get_running_parser_instances()
-            assert (
-                len(current_instances) <= initial_count + 1
-            ), f"Unexpected number of instances: {len(current_instances)}"
+            assert len(current_instances) <= initial_count + 1, (
+                f"Unexpected number of instances: {len(current_instances)}"
+            )
 
             # Verify client works with current deployment
             result = parse_image(test_image, current_instances[0]["url"])

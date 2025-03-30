@@ -78,9 +78,9 @@ def test_server_availability(test_environment):
 
     # Verify server is responsive after deployment
     client = OmniParserClient(provider.server_url)
-    assert (
-        client.check_server_available()
-    ), "OmniParser server not responsive after deployment"
+    assert client.check_server_available(), (
+        "OmniParser server not responsive after deployment"
+    )
 
 
 @pytest.mark.e2e
@@ -93,9 +93,9 @@ def test_image_parsing(test_environment):
     client = OmniParserClient(provider.server_url)
 
     # Verify server is available
-    assert (
-        client.check_server_available()
-    ), "OmniParser server not available for parsing test"
+    assert client.check_server_available(), (
+        "OmniParser server not available for parsing test"
+    )
 
     # Parse image
     result = client.parse_image(test_image)

@@ -549,7 +549,7 @@ def execute_command(
 ) -> Tuple[int, str, str]:  # Return status, stdout, stderr
     """Execute a command via SSH with retries for specific errors."""
     logger.info(
-        f"Executing SSH command: {command[:100]}{'...' if len(command)>100 else ''}"
+        f"Executing SSH command: {command[:100]}{'...' if len(command) > 100 else ''}"
     )
     attempt = 0
     while attempt < max_retries:
