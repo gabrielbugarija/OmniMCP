@@ -6,20 +6,21 @@ and a mocked OmniParserClient.
 """
 
 import pytest
+
+# Make sure patch is imported from unittest.mock
 from unittest.mock import patch, MagicMock
-from PIL import Image  # Keep Image for type hint in fixture
+from PIL import Image  # Keep needed imports
 
-# Import classes under test (ensure omnimcp.py uses OmniParserClient now)
+# Import classes under test
 from omnimcp.omnimcp import OmniMCP, VisualState
+from omnimcp.types import UIElement, ActionVerification  # Keep needed types
 
-# Import necessary types
-from omnimcp.types import UIElement, ActionVerification
-
-# Import test helpers from the new location
+# Import helpers from the correct location
 from omnimcp.testing_utils import generate_test_ui, generate_action_test_pair
 
-# Import the real client class only for type hinting or spec in mock if needed
+# Import real client only needed for spec in mock below
 from omnimcp.omniparser.client import OmniParserClient
+# Import controllers to patch them where OmniMCP imports them
 
 
 # Mock OmniParserClient class for testing VisualState
@@ -144,49 +145,54 @@ async def test_element_finding(synthetic_ui_data, mock_parser_client):
 
 
 @pytest.mark.asyncio
-@patch("omnimcp.omnimcp.OmniParserClient")  # Patch client import within omnimcp module
-async def test_action_verification(mock_omniparser_client_class):
+# Add patches for the controllers used inside OmniMCP.__init__
+@patch("omnimcp.omnimcp.OmniParserClient")
+@patch("omnimcp.omnimcp.MouseController")
+@patch("omnimcp.omnimcp.KeyboardController")
+async def test_action_verification(
+    mock_kb_controller_class,  # Order matters, matches decorators bottom-up
+    mock_mouse_controller_class,
+    mock_omniparser_client_class,
+    # synthetic_ui_data # Fixture not actually used in this specific test logic
+):
     """Test the basic pixel diff action verification in OmniMCP."""
-    # Mock the client instance that OmniMCP's __init__ will create
+    # Mock the client instance
     mock_client_instance = MagicMock(spec=OmniParserClient)
     mock_client_instance.server_url = "http://mock-server:8000"
-    # Mock the parse_image method to return something minimal if needed by _verify_action context
     mock_client_instance.parse_image.return_value = {"parsed_content_list": []}
     mock_omniparser_client_class.return_value = mock_client_instance
 
-    # Generate before/after images for different actions using the helper
+    # Mock the controller instances (optional, patching class often enough)
+    # mock_mouse_controller_class.return_value = MagicMock(spec=MouseController)
+    # mock_kb_controller_class.return_value = MagicMock(spec=KeyboardController)
+
+    # Generate before/after images
     before_click, after_click, _ = generate_action_test_pair("click", "button")
     before_type, after_type, _ = generate_action_test_pair("type", "text_field")
     before_check, after_check, _ = generate_action_test_pair("check", "checkbox")
-    no_change_img, _, _ = generate_action_test_pair(
-        "click", "link"
-    )  # Link click shouldn't change state here
+    no_change_img, _, _ = generate_action_test_pair("click", "link")
 
-    # Create OmniMCP instance (client init is mocked)
+    # Create OmniMCP instance - its internal controller creation will now use mocks
     mcp = OmniMCP()
-    # Manually set screen dimensions on the internal visual state if _verify_action needs it
-    # (The current basic diff doesn't seem to, but good practice if it might)
+    # Manually set screen dimensions if needed by _verify_action
     mcp._visual_state.screen_dimensions = before_click.size
 
-    # Test verification for click action (expect change)
+    # --- Test verification logic ---
     click_verification = await mcp._verify_action(before_click, after_click)
     assert isinstance(click_verification, ActionVerification)
     assert click_verification.success is True, "Click action verification failed"
-    assert click_verification.confidence > 0.01  # Basic check for some confidence
+    assert click_verification.confidence > 0.01
 
-    # Test verification for type action (expect change)
     type_verification = await mcp._verify_action(before_type, after_type)
     assert isinstance(type_verification, ActionVerification)
     assert type_verification.success is True, "Type action verification failed"
     assert type_verification.confidence > 0.01
 
-    # Test verification for check action (expect change)
     check_verification = await mcp._verify_action(before_check, after_check)
     assert isinstance(check_verification, ActionVerification)
     assert check_verification.success is True, "Check action verification failed"
     assert check_verification.confidence > 0.01
 
-    # Test verification for no change action (expect no success)
     no_change_verification = await mcp._verify_action(no_change_img, no_change_img)
     assert isinstance(no_change_verification, ActionVerification)
     assert no_change_verification.success is False, (
