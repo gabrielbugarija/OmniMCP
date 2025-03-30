@@ -10,7 +10,7 @@ import requests
 from loguru import logger
 from PIL import Image, ImageDraw
 
-from server import Deploy
+from .server import Deploy
 
 
 class OmniParserClient:

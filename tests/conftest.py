@@ -12,10 +12,10 @@ def pytest_configure(config):
 def pytest_addoption(parser):
     """Add custom command line options to pytest."""
     parser.addoption(
-        "--run-e2e", 
-        action="store_true", 
-        default=False, 
-        help="Run end-to-end tests that may require external resources"
+        "--run-e2e",
+        action="store_true",
+        default=False,
+        help="Run end-to-end tests that may require external resources",
     )
 
 

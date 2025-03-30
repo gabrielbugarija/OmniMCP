@@ -29,6 +29,8 @@ CLOUDWATCH_RULE_NAME = f"{config.PROJECT_NAME}-inactivity-monitor"
 
 CLEANUP_ON_FAILURE = False
 
+# cloudwatch_client = boto3.client('cloudwatch', region_name=config.AWS_REGION)
+
 
 def create_key_pair(
     key_name: str = config.AWS_EC2_KEY_NAME, key_path: str = config.AWS_EC2_KEY_PATH
@@ -450,159 +452,187 @@ def execute_command(ssh_client: paramiko.SSHClient, command: str) -> None:
 
 
 def create_auto_shutdown_infrastructure(instance_id: str) -> None:
-    """Create CloudWatch rule and Lambda function for auto-shutdown.
-
-    Args:
-        instance_id: ID of the EC2 instance to monitor
-    """
+    """Create CloudWatch Alarm and Lambda function for CPU inactivity based auto-shutdown."""
     lambda_client = boto3.client("lambda", region_name=config.AWS_REGION)
-    events_client = boto3.client("events", region_name=config.AWS_REGION)
+    # events_client = boto3.client("events", region_name=config.AWS_REGION) # No longer needed
     iam_client = boto3.client("iam", region_name=config.AWS_REGION)
+    cloudwatch_client = boto3.client('cloudwatch', region_name=config.AWS_REGION) # Ensure client is available
 
-    # Create IAM role for Lambda function
+    role_name = f"{config.PROJECT_NAME}-lambda-role"
+    lambda_function_name = LAMBDA_FUNCTION_NAME # Use constant from top of file
+    alarm_name = f"{config.PROJECT_NAME}-CPU-Low-Alarm-{instance_id}" # Unique alarm name
+
+    # --- Create or Get IAM Role (keep this part mostly the same) ---
     try:
-        assume_role_policy = {
-            "Version": "2012-10-17",
-            "Statement": [
-                {
-                    "Effect": "Allow",
-                    "Principal": {"Service": "lambda.amazonaws.com"},
-                    "Action": "sts:AssumeRole",
-                }
-            ],
-        }
-
+        assume_role_policy = { ... } # Keep existing policy document
         response = iam_client.create_role(
-            RoleName=f"{config.PROJECT_NAME}-lambda-role",
-            AssumeRolePolicyDocument=json.dumps(assume_role_policy),
+            RoleName=role_name, AssumeRolePolicyDocument=json.dumps(assume_role_policy)
         )
-
         role_arn = response["Role"]["Arn"]
-
-        # Attach EC2 and CloudWatch permissions
-        iam_client.attach_role_policy(
-            RoleName=f"{config.PROJECT_NAME}-lambda-role",
-            PolicyArn="arn:aws:iam::aws:policy/AmazonEC2FullAccess",
-        )
-
-        iam_client.attach_role_policy(
-            RoleName=f"{config.PROJECT_NAME}-lambda-role",
-            PolicyArn="arn:aws:iam::aws:policy/CloudWatchLogsFullAccess",
-        )
-
-        logger.info(f"Created IAM role for Lambda function: {role_arn}")
-
-        # Wait for role to be available
-        time.sleep(10)
-
+        # Attach policies (keep existing)
+        iam_client.attach_role_policy(RoleName=role_name, PolicyArn="arn:aws:iam::aws:policy/AmazonEC2FullAccess")
+        iam_client.attach_role_policy(RoleName=role_name, PolicyArn="arn:aws:iam::aws:policy/CloudWatchLogsFullAccess")
+        logger.info(f"Created IAM role {role_name}: {role_arn}")
+        time.sleep(10) # Wait for role propagation
     except ClientError as e:
         if e.response["Error"]["Code"] == "EntityAlreadyExists":
-            logger.info("IAM role already exists, retrieving ARN...")
-            response = iam_client.get_role(
-                RoleName=f"{config.PROJECT_NAME}-lambda-role"
-            )
+            logger.info(f"IAM role {role_name} already exists, retrieving ARN...")
+            response = iam_client.get_role(RoleName=role_name)
             role_arn = response["Role"]["Arn"]
         else:
-            logger.error(f"Error creating IAM role: {e}")
-            return
+            logger.error(f"Error creating/getting IAM role {role_name}: {e}")
+            return # Cannot proceed without role
 
-    # Create Lambda function for auto-shutdown
+    # --- Define Updated Lambda Function Code ---
     lambda_code = f"""
 import boto3
-import datetime
+import os
 import json
 
 def lambda_handler(event, context):
-    ec2 = boto3.client('ec2', region_name='{config.AWS_REGION}')
-    instance_id = '{instance_id}'
+ # Get instance ID and region from environment variables
+ instance_id = os.environ.get('INSTANCE_ID')
+ aws_region = os.environ.get('AWS_REGION')
+ if not instance_id or not aws_region:
+     print("Error: INSTANCE_ID or AWS_REGION environment variable not set.")
+     return {{'statusCode': 500, 'body': json.dumps('Configuration error')}}
 
-    # Check if the instance is running
-    response = ec2.describe_instances(InstanceIds=[instance_id])
-    state = response['Reservations'][0]['Instances'][0]['State']['Name']
+ ec2 = boto3.client('ec2', region_name=aws_region)
+ # The alarm triggered, meaning CPU was low for the duration.
+ # Double check state before stopping.
+ print(f"Inactivity Alarm triggered for instance: {{instance_id}}. Checking state...")
 
-    if state == 'running':
-        print(f"Stopping instance {{instance_id}} due to inactivity")
-        ec2.stop_instances(InstanceIds=[instance_id])
-        return {{
-            'statusCode': 200,
-            'body': json.dumps('Instance stopped due to inactivity')
-        }}
-    else:
-        print(f"Instance {{instance_id}} is not running (state: {{state}})")
-        return {{
-            'statusCode': 200,
-            'body': json.dumps(f'Instance is in {{state}} state, no action taken')
-        }}
-    """
+ try:
+     response = ec2.describe_instances(InstanceIds=[instance_id])
+     if not response['Reservations']:
+          print(f"Instance {{instance_id}} not found.")
+          return {{'statusCode': 404, 'body': json.dumps('Instance not found')}}
 
+     instance_data = response['Reservations'][0]['Instances'][0]
+     state = instance_data['State']['Name']
+
+     # Only stop if it's actually running (prevents errors if already stopping/stopped)
+     if state == 'running':
+         print(f"Instance {{instance_id}} is running. Stopping due to inactivity alarm.")
+         ec2.stop_instances(InstanceIds=[instance_id])
+         print(f"Stop command issued for {{instance_id}}.")
+         return {{'statusCode': 200, 'body': json.dumps('Instance stop initiated')}}
+     else:
+         print(f"Instance {{instance_id}} is already in state '{{state}}'. No action taken.")
+         return {{'statusCode': 200, 'body': json.dumps('Instance not running')}}
+ except Exception as e:
+     print(f"Error interacting with EC2: {{str(e)}}")
+     return {{'statusCode': 500, 'body': json.dumps(f'Error: {{str(e)}}')}}
+"""
+
+    # --- Create or Update Lambda Function (Add Environment Variables) ---
     try:
-        # Delete existing function if it exists
-        try:
-            lambda_client.delete_function(FunctionName=LAMBDA_FUNCTION_NAME)
-            logger.info(f"Deleted existing Lambda function: {LAMBDA_FUNCTION_NAME}")
-        except ClientError:
-            pass  # Function doesn't exist, which is fine
-
-        # Create new function
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "a") as zip_file:
             zip_file.writestr("lambda_function.py", lambda_code)
+        zip_content = zip_buffer.getvalue()
 
-        response = lambda_client.create_function(
-            FunctionName=LAMBDA_FUNCTION_NAME,
-            Runtime="python3.9",
-            Role=role_arn,
-            Handler="lambda_function.lambda_handler",
-            Code={"ZipFile": zip_buffer.getvalue()},
-            Timeout=30,
-            MemorySize=128,
-            Description=f"Auto-shutdown function for {config.PROJECT_NAME} instance",
-        )
+        env_vars = {'Variables': {'INSTANCE_ID': instance_id, 'AWS_REGION': config.AWS_REGION}}
 
-        lambda_arn = response["FunctionArn"]
-        logger.info(f"Created Lambda function: {lambda_arn}")
-
-        # Create CloudWatch rule to trigger Lambda after inactivity
         try:
-            events_client.delete_rule(Name=CLOUDWATCH_RULE_NAME)
-            logger.info(f"Deleted existing CloudWatch rule: {CLOUDWATCH_RULE_NAME}")
-        except ClientError:
-            pass  # Rule doesn't exist, which is fine
+             # Try updating existing function first
+             response = lambda_client.update_function_code(FunctionName=lambda_function_name, ZipFile=zip_content)
+             lambda_client.update_function_configuration(FunctionName=lambda_function_name, Role=role_arn, Environment=env_vars, Timeout=30, MemorySize=128)
+             logger.info(f"Updated Lambda function: {lambda_function_name}")
+             lambda_arn = response['FunctionArn'] # ARN doesn't change on update
+             # Need to get ARN if update worked but didn't return it directly in response
+             if 'FunctionArn' not in response:
+                  func_config = lambda_client.get_function_configuration(FunctionName=lambda_function_name)
+                  lambda_arn = func_config['FunctionArn']
 
-        response = events_client.put_rule(
-            Name=CLOUDWATCH_RULE_NAME,
-            ScheduleExpression=f"rate({config.INACTIVITY_TIMEOUT_MINUTES} minutes)",
-            State="ENABLED",
-            Description=f"Monitors {config.PROJECT_NAME} instance for inactivity",
-        )
-
-        rule_arn = response["RuleArn"]
-        logger.info(f"Created CloudWatch rule: {rule_arn}")
-
-        # Add lambda permission to be invoked by CloudWatch
-        try:
-            lambda_client.add_permission(
-                FunctionName=LAMBDA_FUNCTION_NAME,
-                StatementId=f"{config.PROJECT_NAME}-cloudwatch-trigger",
-                Action="lambda:InvokeFunction",
-                Principal="events.amazonaws.com",
-                SourceArn=rule_arn,
-            )
         except ClientError as e:
-            if e.response["Error"]["Code"] != "ResourceConflictException":
-                raise
+             if e.response['Error']['Code'] == 'ResourceNotFoundException':
+                  # Function doesn't exist, create it
+                  response = lambda_client.create_function(
+                      FunctionName=lambda_function_name,
+                      Runtime="python3.9", # Or newer if needed
+                      Role=role_arn,
+                      Handler="lambda_function.lambda_handler",
+                      Code={"ZipFile": zip_content},
+                      Timeout=30,
+                      MemorySize=128,
+                      Description=f"Auto-shutdown function for {config.PROJECT_NAME} instance {instance_id}",
+                      Environment=env_vars,
+                      Tags={'Project': config.PROJECT_NAME} # Optional tag
+                  )
+                  lambda_arn = response["FunctionArn"]
+                  logger.info(f"Created Lambda function: {lambda_arn}")
+             else:
+                  raise # Reraise other errors
 
-        # Connect the rule to the Lambda function
-        events_client.put_targets(
-            Rule=CLOUDWATCH_RULE_NAME, Targets=[{"Id": "1", "Arn": lambda_arn}]
-        )
+        # --- Remove Old CloudWatch Events Rule (if it exists) ---
+        try:
+             events_client = boto3.client("events", region_name=config.AWS_REGION)
+             # Need rule name from config or constant
+             rule_name = CLOUDWATCH_RULE_NAME # From top of file
+             try:
+                  events_client.remove_targets(Rule=rule_name, Ids=["1"], Force=True)
+             except ClientError as e:
+                  if e.response['Error']['Code'] != 'ResourceNotFoundException':
+                       logger.warning(f"Could not remove targets from rule {rule_name}: {e}")
+             events_client.delete_rule(Name=rule_name)
+             logger.info(f"Deleted old CloudWatch Events rule: {rule_name} (if it existed)")
+        except ClientError as e:
+             if e.response["Error"]["Code"] != "ResourceNotFoundException":
+                  logger.warning(f"Error deleting old CloudWatch Events rule {rule_name}: {e}")
 
-        logger.info(
-            f"Auto-shutdown infrastructure created successfully for {instance_id=}"
-        )
+        # --- Create New CloudWatch Alarm ---
+        # Calculate evaluation periods based on timeout and 5-min period
+        evaluation_periods = max(1, config.INACTIVITY_TIMEOUT_MINUTES // 5)
+        logger.info(f"Setting up alarm for < 5% CPU over {evaluation_periods * 5} minutes.")
+
+        try:
+             # Delete existing alarm first for idempotency
+             try:
+                  cloudwatch_client.delete_alarms(AlarmNames=[alarm_name])
+                  logger.info(f"Deleted potentially existing CloudWatch alarm: {alarm_name}")
+             except ClientError as e:
+                  if e.response['Error']['Code'] != 'ResourceNotFound':
+                       logger.warning(f"Could not delete existing alarm {alarm_name}: {e}")
+
+             cloudwatch_client.put_metric_alarm(
+                 AlarmName=alarm_name,
+                 AlarmDescription=f'Stop EC2 instance {instance_id} if avg CPU < 5% for {evaluation_periods * 5} mins',
+                 ActionsEnabled=True,
+                 AlarmActions=[lambda_arn], # Set Lambda function ARN as action
+                 MetricName='CPUUtilization',
+                 Namespace='AWS/EC2',
+                 Statistic='Average',
+                 Dimensions=[{'Name': 'InstanceId', 'Value': instance_id}],
+                 Period=300,  # 300 seconds = 5 minutes
+                 EvaluationPeriods=evaluation_periods,
+                 Threshold=5.0,
+                 ComparisonOperator='LessThanThreshold',
+                 TreatMissingData='breaching', # Treat missing data as low CPU (safer for shutdown)
+                 Tags=[{'Key': 'Project', 'Value': config.PROJECT_NAME}]
+             )
+             logger.info(f"Created/Updated CloudWatch Alarm '{alarm_name}' triggering Lambda on low CPU.")
+
+             # Permissions for CloudWatch Alarms to invoke Lambda are usually handled
+             # automatically when setting AlarmActions. We remove the old event permission.
+             try:
+                  lambda_client.remove_permission(
+                      FunctionName=lambda_function_name,
+                      StatementId=f"{config.PROJECT_NAME}-cloudwatch-trigger" # Old ID used for event rule
+                  )
+                  logger.info("Removed old CloudWatch Events permission from Lambda.")
+             except ClientError as e:
+                  if e.response['Error']['Code'] != 'ResourceNotFoundException':
+                       logger.warning(f"Could not remove old Lambda permission: {e}")
+
+        except Exception as e:
+             logger.error(f"Failed to create/update CloudWatch alarm: {e}")
+             # Consider if deployment should fail here or just warn
+
+        logger.info(f"Auto-shutdown infrastructure updated successfully for {instance_id=}")
 
     except Exception as e:
-        logger.error(f"Error creating auto-shutdown infrastructure: {e}")
+        logger.error(f"Error setting up auto-shutdown infrastructure: {e}", exc_info=True)
 
 
 class Deploy:
@@ -946,101 +976,159 @@ class Deploy:
         project_name: str = config.PROJECT_NAME,
         security_group_name: str = config.AWS_EC2_SECURITY_GROUP,
     ) -> None:
-        """Terminates EC2 instance and deletes associated security group and resources.
+        """
+        Terminates EC2 instance(s) and deletes associated resources
+        (SG, Auto-Shutdown Lambda, CW Alarm, IAM Role).
+        Excludes Discovery API components cleanup.
 
         Args:
             project_name (str): The project name used to tag the instance.
-                Defaults to config.PROJECT_NAME.
             security_group_name (str): The name of the security group to delete.
-                Defaults to config.AWS_EC2_SECURITY_GROUP.
         """
+        # 1. Initialize clients
         ec2_resource = boto3.resource("ec2", region_name=config.AWS_REGION)
         ec2_client = boto3.client("ec2", region_name=config.AWS_REGION)
         lambda_client = boto3.client("lambda", region_name=config.AWS_REGION)
-        events_client = boto3.client("events", region_name=config.AWS_REGION)
+        cloudwatch_client = boto3.client('cloudwatch', region_name=config.AWS_REGION)
         iam_client = boto3.client("iam", region_name=config.AWS_REGION)
 
-        # Terminate EC2 instances
-        instances = ec2_resource.instances.filter(
-            Filters=[
-                {"Name": "tag:Name", "Values": [project_name]},
-                {
-                    "Name": "instance-state-name",
-                    "Values": [
-                        "pending",
-                        "running",
-                        "shutting-down",
-                        "stopped",
-                        "stopping",
-                    ],
-                },
-            ]
-        )
+        logger.info("Starting cleanup...")
 
-        for instance in instances:
-            logger.info(f"Terminating instance: ID - {instance.id}")
-            instance.terminate()
-            instance.wait_until_terminated()
-            logger.info(f"Instance {instance.id} terminated successfully.")
-
-        # Delete CloudWatch rule and Lambda function
+        # 2. Terminate EC2 instances
+        instances_terminated = []
         try:
-            events_client.remove_targets(Rule=CLOUDWATCH_RULE_NAME, Ids=["1"])
-            events_client.delete_rule(Name=CLOUDWATCH_RULE_NAME)
-            logger.info(f"Deleted CloudWatch rule: {CLOUDWATCH_RULE_NAME}")
+            instances = ec2_resource.instances.filter(
+                Filters=[
+                    {"Name": "tag:Name", "Values": [project_name]},
+                    {
+                        "Name": "instance-state-name",
+                        "Values": [
+                            "pending", "running", "shutting-down",
+                            "stopped", "stopping",
+                        ],
+                    },
+                ]
+            )
+            instance_list = list(instances) # Materialize to get count and iterate safely
+            if not instance_list:
+                 logger.info(f"No instances found with tag Name={project_name} to terminate.")
+            else:
+                 logger.info(f"Found {len(instance_list)} instance(s) to terminate.")
+                 for instance in instance_list:
+                     logger.info(f"Terminating instance: ID - {instance.id}")
+                     instances_terminated.append(instance.id)
+                     try:
+                          instance.terminate()
+                     except ClientError as term_error:
+                          logger.warning(f"Could not issue terminate for {instance.id}: {term_error}")
+
+                 # Wait for termination if any instances were targeted
+                 if instances_terminated:
+                     logger.info(f"Waiting for instance(s) {instances_terminated} to terminate...")
+                     # Wait for all instances submitted for termination
+                     try:
+                          waiter = ec2_client.get_waiter('instance_terminated')
+                          waiter.wait(
+                              InstanceIds=instances_terminated,
+                              WaiterConfig={'Delay': 15, 'MaxAttempts': 40} # Wait up to 10 mins
+                          )
+                          logger.info(f"Instance(s) {instances_terminated} confirmed terminated.")
+                     except Exception as wait_error:
+                          logger.warning(f"Error or timeout waiting for instance termination: {wait_error}")
+                          logger.warning("Proceeding with cleanup, some resources might fail if instances linger.")
+
+        except Exception as e:
+            logger.error(f"Error during instance discovery/termination: {e}")
+            # Continue cleanup attempt
+
+        # 3. Delete CloudWatch Alarms associated with the project
+        try:
+            # Using prefix is common, but adjust if you used tags or a different naming scheme
+            alarm_prefix = f"{config.PROJECT_NAME}-CPU-Low-Alarm-"
+            paginator = cloudwatch_client.get_paginator('describe_alarms')
+            alarms_to_delete = []
+            logger.info(f"Searching for CloudWatch alarms with prefix: {alarm_prefix}")
+
+            for page in paginator.paginate(AlarmNamePrefix=alarm_prefix):
+                for alarm in page.get('MetricAlarms', []):
+                     # Could add more filtering here if needed (e.g., check tags)
+                     alarms_to_delete.append(alarm['AlarmName'])
+
+            alarms_to_delete = list(set(alarms_to_delete)) # Remove potential duplicates
+
+            if alarms_to_delete:
+                logger.info(f"Deleting CloudWatch alarms: {alarms_to_delete}")
+                # Batch delete in chunks of up to 100
+                for i in range(0, len(alarms_to_delete), 100):
+                    chunk = alarms_to_delete[i:i + 100]
+                    try:
+                        cloudwatch_client.delete_alarms(AlarmNames=chunk)
+                        logger.info(f"Deleted alarm chunk: {chunk}")
+                    except ClientError as delete_alarm_err:
+                         logger.error(f"Failed to delete alarm chunk {chunk}: {delete_alarm_err}")
+            else:
+                logger.info("No matching CloudWatch alarms found to delete.")
+        except Exception as e:
+            logger.error(f"Error searching/deleting CloudWatch alarms: {e}")
+
+       # 4. Delete Lambda function (Auto-Shutdown only)
+        lambda_function_name = LAMBDA_FUNCTION_NAME # Constant defined at top of file
+        try:
+            logger.info(f"Attempting to delete Lambda function: {lambda_function_name}")
+            lambda_client.delete_function(FunctionName=lambda_function_name)
+            logger.info(f"Deleted Lambda function: {lambda_function_name}")
         except ClientError as e:
             if e.response["Error"]["Code"] == "ResourceNotFoundException":
-                logger.info(f"CloudWatch rule {CLOUDWATCH_RULE_NAME} does not exist")
+                logger.info(f"Lambda function {lambda_function_name} does not exist.")
             else:
-                logger.error(f"Error deleting CloudWatch rule: {e}")
+                # Log other errors but continue cleanup
+                logger.error(f"Error deleting Lambda function {lambda_function_name}: {e}")
 
+        # 5. Delete IAM Role (Auto-shutdown only)
+        role_name = f"{config.PROJECT_NAME}-lambda-role" # Role used by auto-shutdown lambda
         try:
-            lambda_client.delete_function(FunctionName=LAMBDA_FUNCTION_NAME)
-            logger.info(f"Deleted Lambda function: {LAMBDA_FUNCTION_NAME}")
+            logger.info(f"Attempting to delete IAM role: {role_name}")
+            # Detach managed policies first
+            attached_policies = iam_client.list_attached_role_policies(RoleName=role_name).get("AttachedPolicies", [])
+            for policy in attached_policies:
+                logger.info(f"Detaching policy {policy['PolicyArn']} from role {role_name}")
+                iam_client.detach_role_policy(RoleName=role_name, PolicyArn=policy["PolicyArn"])
+
+            # Detach inline policies (if any - less common for this setup)
+            inline_policies = iam_client.list_role_policies(RoleName=role_name).get("PolicyNames", [])
+            for policy_name in inline_policies:
+                 logger.info(f"Deleting inline policy {policy_name} from role {role_name}")
+                 iam_client.delete_role_policy(RoleName=role_name, PolicyName=policy_name)
+
+            # Delete the role
+            iam_client.delete_role(RoleName=role_name)
+            logger.info(f"Deleted IAM role: {role_name}")
         except ClientError as e:
-            if e.response["Error"]["Code"] == "ResourceNotFoundException":
-                logger.info(f"Lambda function {LAMBDA_FUNCTION_NAME} does not exist")
+            if e.response["Error"]["Code"] == "NoSuchEntity":
+                 logger.info(f"IAM role {role_name} does not exist.")
             else:
-                logger.error(f"Error deleting Lambda function: {e}")
+                # Log other errors but continue cleanup
+                logger.error(f"Error deleting IAM role {role_name}: {e}")
 
-        # Delete IAM roles
-        for role_name in [
-            f"{config.PROJECT_NAME}-lambda-role",
-            f"{config.PROJECT_NAME}-discovery-role",
-        ]:
-            try:
-                # Detach policies first
-                attached_policies = iam_client.list_attached_role_policies(
-                    RoleName=role_name
-                )
-                for policy in attached_policies.get("AttachedPolicies", []):
-                    iam_client.detach_role_policy(
-                        RoleName=role_name, PolicyArn=policy["PolicyArn"]
-                    )
-                    logger.info(
-                        f"Detached policy {policy['PolicyArn']} from role {role_name}"
-                    )
 
-                iam_client.delete_role(RoleName=role_name)
-                logger.info(f"Deleted IAM role: {role_name}")
-            except ClientError as e:
-                if e.response["Error"]["Code"] != "NoSuchEntity":
-                    logger.error(f"Error deleting IAM role {role_name}: {e}")
-
-        # Delete security group
+        # 6. Delete Security Group
+        # Add a delay before deleting SG to allow network interfaces to detach
+        sg_delete_wait = 30 # Seconds
+        logger.info(f"Waiting {sg_delete_wait} seconds before attempting security group deletion...")
+        time.sleep(sg_delete_wait)
         try:
+            logger.info(f"Attempting to delete security group: {security_group_name}")
             ec2_client.delete_security_group(GroupName=security_group_name)
             logger.info(f"Deleted security group: {security_group_name}")
         except ClientError as e:
             if e.response["Error"]["Code"] == "InvalidGroup.NotFound":
-                logger.info(
-                    f"Security group {security_group_name} does not exist or already "
-                    "deleted."
-                )
+                logger.info(f"Security group {security_group_name} not found.")
+            elif e.response["Error"]["Code"] == "DependencyViolation":
+                 logger.error(f"Could not delete security group {security_group_name} due to existing dependencies (e.g., network interfaces). Manual cleanup might be required. Error: {e}")
             else:
-                logger.error(f"Error deleting security group: {e}")
+                logger.error(f"Error deleting security group {security_group_name}: {e}")
 
-        logger.info("Cleanup completed successfully.")
+        logger.info("Cleanup process finished.")
 
     @staticmethod
     def stop_instance(instance_id: str) -> None:
