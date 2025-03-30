@@ -1,3 +1,5 @@
+# omnimcp/omniparser/client.py
+
 """Client module for interacting with the OmniParser server."""
 
 import base64
