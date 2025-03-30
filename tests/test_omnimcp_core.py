@@ -189,8 +189,8 @@ async def test_action_verification(mock_omniparser_client_class):
     # Test verification for no change action (expect no success)
     no_change_verification = await mcp._verify_action(no_change_img, no_change_img)
     assert isinstance(no_change_verification, ActionVerification)
-    assert (
-        no_change_verification.success is False
-    ), "No change action verification failed"
+    assert no_change_verification.success is False, (
+        "No change action verification failed"
+    )
     assert no_change_verification.confidence == 0.0
     print("✅ Action verification test passed")

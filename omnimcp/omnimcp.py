@@ -231,8 +231,8 @@ class VisualState:
                     h * img_height < min_pixel_size
                 ):
                     logger.debug(
-                        f"Skipping tiny element (id={element_id}, w={w*img_width:.1f}, "
-                        f"h={h*img_height:.1f} px): {item.get('content')}"
+                        f"Skipping tiny element (id={element_id}, w={w * img_width:.1f}, "
+                        f"h={h * img_height:.1f} px): {item.get('content')}"
                     )
                     return None
             # else: # If dimensions aren't available yet, cannot filter by pixel size

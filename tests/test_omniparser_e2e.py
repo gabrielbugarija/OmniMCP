@@ -60,9 +60,9 @@ def test_client_initialization_and_availability(test_image):  # Combined test
 
     assert result is not None, "Parse result should not be None"
     assert "error" not in result, f"Parsing returned an error: {result.get('error')}"
-    assert (
-        "parsed_content_list" in result
-    ), "Parsing result missing 'parsed_content_list'"
+    assert "parsed_content_list" in result, (
+        "Parsing result missing 'parsed_content_list'"
+    )
     elements = result.get("parsed_content_list", [])
     logger.info(f"Found {len(elements)} elements.")
     assert len(elements) >= 3, "Expected at least a few elements in the synthetic image"

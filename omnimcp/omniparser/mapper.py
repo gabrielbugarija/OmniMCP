@@ -66,7 +66,7 @@ def map_omniparser_to_uielements(
             min_pixel_size = 3  # Minimum width or height in pixels
             if (w * img_width < min_pixel_size) or (h * img_height < min_pixel_size):
                 logger.debug(
-                    f"Skipping potentially tiny element (w={w*img_width:.1f}, h={h*img_height:.1f} px): {item.get('content')}"
+                    f"Skipping potentially tiny element (w={w * img_width:.1f}, h={h * img_height:.1f} px): {item.get('content')}"
                 )
                 continue
 
