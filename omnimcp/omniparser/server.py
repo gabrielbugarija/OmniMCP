@@ -1,6 +1,6 @@
 # omnimcp/omniparser/server.py
 
-"""Deployment module for OmniParser on AWS EC2 with on-demand startup and auto-shutdown."""
+"""Deployment module for OmniParser on AWS EC2 with on-demand startup and ALARM-BASED auto-shutdown."""
 
 import datetime
 import os
@@ -9,6 +9,7 @@ import time
 import json
 import io
 import zipfile
+from typing import Tuple # Added for type hinting consistency
 
 from botocore.exceptions import ClientError
 from loguru import logger
@@ -16,38 +17,29 @@ import boto3
 import fire
 import paramiko
 
+# Assuming config is imported correctly from omnimcp.config
 from omnimcp.config import config
 
-# Update default configuration values
-# config.AWS_EC2_INSTANCE_TYPE = "g4dn.xlarge"  # 4 vCPU, 16GB RAM, T4 GPU
-# config.INACTIVITY_TIMEOUT_MINUTES = 20  # Auto-shutdown after 20min inactivity
-
-# Lambda function name for auto-shutdown
+# Constants for AWS resource names
 LAMBDA_FUNCTION_NAME = f"{config.PROJECT_NAME}-auto-shutdown"
-# CloudWatch rule name for monitoring
-CLOUDWATCH_RULE_NAME = f"{config.PROJECT_NAME}-inactivity-monitor"
+# CLOUDWATCH_RULE_NAME = f"{config.PROJECT_NAME}-inactivity-monitor" # No longer used for rate() rule
+IAM_ROLE_NAME = f"{config.PROJECT_NAME}-lambda-role" # Role for the auto-shutdown Lambda
 
-CLEANUP_ON_FAILURE = False
-
-# cloudwatch_client = boto3.client('cloudwatch', region_name=config.AWS_REGION)
+CLEANUP_ON_FAILURE = False # Set to True to attempt cleanup even if start fails
 
 
 def create_key_pair(
     key_name: str = config.AWS_EC2_KEY_NAME, key_path: str = config.AWS_EC2_KEY_PATH
 ) -> str | None:
-    """Create an EC2 key pair.
-
-    Args:
-        key_name: Name of the key pair
-        key_path: Path where to save the key file
-
-    Returns:
-        str | None: Key name if successful, None otherwise
-    """
+    """Create an EC2 key pair."""
     ec2_client = boto3.client("ec2", region_name=config.AWS_REGION)
     try:
+        logger.info(f"Attempting to create key pair: {key_name}")
         key_pair = ec2_client.create_key_pair(KeyName=key_name)
         private_key = key_pair["KeyMaterial"]
+
+        # Ensure directory exists if key_path includes directories
+        os.makedirs(os.path.dirname(key_path), exist_ok=True)
 
         with open(key_path, "w") as key_file:
             key_file.write(private_key)
@@ -56,64 +48,73 @@ def create_key_pair(
         logger.info(f"Key pair {key_name} created and saved to {key_path}")
         return key_name
     except ClientError as e:
-        logger.error(f"Error creating key pair: {e}")
-        return None
+        if e.response['Error']['Code'] == 'InvalidKeyPair.Duplicate':
+             logger.warning(f"Key pair '{key_name}' already exists in AWS. Attempting to delete and recreate.")
+             try:
+                  ec2_client.delete_key_pair(KeyName=key_name)
+                  logger.info(f"Deleted existing key pair '{key_name}' from AWS.")
+                  # Retry creation
+                  return create_key_pair(key_name, key_path)
+             except ClientError as e_del:
+                  logger.error(f"Failed to delete existing key pair '{key_name}': {e_del}")
+                  return None
+        else:
+             logger.error(f"Error creating key pair {key_name}: {e}")
+             return None
 
 
 def get_or_create_security_group_id(ports: list[int] = [22, config.PORT]) -> str | None:
-    """Get existing security group or create a new one.
-
-    Args:
-        ports: List of ports to open in the security group
-
-    Returns:
-        str | None: Security group ID if successful, None otherwise
-    """
-    ec2 = boto3.client("ec2", region_name=config.AWS_REGION)
+    """Get existing security group or create a new one."""
+    ec2_client = boto3.client("ec2", region_name=config.AWS_REGION)
+    sg_name = config.AWS_EC2_SECURITY_GROUP
 
     ip_permissions = [
         {
             "IpProtocol": "tcp",
             "FromPort": port,
             "ToPort": port,
-            "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+            "IpRanges": [{"CidrIp": "0.0.0.0/0"}], # Allows access from any IP, adjust if needed
         }
         for port in ports
     ]
 
     try:
-        response = ec2.describe_security_groups(
-            GroupNames=[config.AWS_EC2_SECURITY_GROUP]
-        )
+        response = ec2_client.describe_security_groups(GroupNames=[sg_name])
         security_group_id = response["SecurityGroups"][0]["GroupId"]
-        logger.info(
-            f"Security group '{config.AWS_EC2_SECURITY_GROUP}' already exists: "
-            f"{security_group_id}"
-        )
+        logger.info(f"Security group '{sg_name}' already exists: {security_group_id}")
 
-        for ip_permission in ip_permissions:
-            try:
-                ec2.authorize_security_group_ingress(
-                    GroupId=security_group_id, IpPermissions=[ip_permission]
-                )
-                logger.info(f"Added inbound rule for port {ip_permission['FromPort']}")
-            except ClientError as e:
-                if e.response["Error"]["Code"] == "InvalidPermission.Duplicate":
-                    logger.info(
-                        f"Rule for port {ip_permission['FromPort']} already exists"
-                    )
-                else:
-                    logger.error(
-                        f"Error adding rule for port {ip_permission['FromPort']}: {e}"
-                    )
+        # Ensure desired rules exist (idempotent check)
+        existing_permissions = response["SecurityGroups"][0].get("IpPermissions", [])
+        current_ports_open = set()
+        for perm in existing_permissions:
+            if perm.get("IpProtocol") == "tcp" and any(ip_range == {"CidrIp": "0.0.0.0/0"} for ip_range in perm.get("IpRanges",[])):
+                current_ports_open.add(perm.get("FromPort"))
+
+        for required_perm in ip_permissions:
+            port_to_open = required_perm["FromPort"]
+            if port_to_open not in current_ports_open:
+                try:
+                    logger.info(f"Attempting to add inbound rule for port {port_to_open}...")
+                    ec2_client.authorize_security_group_ingress(GroupId=security_group_id, IpPermissions=[required_perm])
+                    logger.info(f"Added inbound rule for port {port_to_open}")
+                except ClientError as e_auth:
+                    # Handle race condition or other errors
+                    if e_auth.response["Error"]["Code"] == "InvalidPermission.Duplicate":
+                         logger.info(f"Rule for port {port_to_open} likely added concurrently or already exists.")
+                    else:
+                         logger.error(f"Error adding rule for port {port_to_open}: {e_auth}")
+            else:
+                 logger.info(f"Rule for port {port_to_open} already exists.")
 
         return security_group_id
+
     except ClientError as e:
         if e.response["Error"]["Code"] == "InvalidGroup.NotFound":
+            logger.info(f"Security group '{sg_name}' not found. Creating...")
             try:
-                response = ec2.create_security_group(
-                    GroupName=config.AWS_EC2_SECURITY_GROUP,
-                    Description="Security group for OmniParser deployment",
+                response = ec2_client.create_security_group(
+                    GroupName=sg_name,
+                    Description=f"Security group for {config.PROJECT_NAME} deployment",
                     TagSpecifications=[
                         {
                             "ResourceType": "security-group",
@@ -122,22 +123,18 @@ def get_or_create_security_group_id(ports: list[int] = [22, config.PORT]) -> str
                     ],
                 )
                 security_group_id = response["GroupId"]
-                logger.info(
-                    f"Created security group '{config.AWS_EC2_SECURITY_GROUP}' "
-                    f"with ID: {security_group_id}"
-                )
+                logger.info(f"Created security group '{sg_name}' with ID: {security_group_id}")
 
-                ec2.authorize_security_group_ingress(
-                    GroupId=security_group_id, IpPermissions=ip_permissions
-                )
+                # Add rules after creation
+                time.sleep(5) # Brief wait for SG propagation
+                ec2_client.authorize_security_group_ingress(GroupId=security_group_id, IpPermissions=ip_permissions)
                 logger.info(f"Added inbound rules for ports {ports}")
-
                 return security_group_id
-            except ClientError as e:
-                logger.error(f"Error creating security group: {e}")
+            except ClientError as e_create:
+                logger.error(f"Error creating security group '{sg_name}': {e_create}")
                 return None
         else:
-            logger.error(f"Error describing security groups: {e}")
+            logger.error(f"Error describing security group '{sg_name}': {e}")
             return None
 
 
@@ -148,667 +145,871 @@ def deploy_ec2_instance(
     key_name: str = config.AWS_EC2_KEY_NAME,
     disk_size: int = config.AWS_EC2_DISK_SIZE,
 ) -> tuple[str | None, str | None]:
-    """Deploy a new EC2 instance or return existing one.
-
-    Args:
-        ami: AMI ID to use for the instance
-        instance_type: EC2 instance type
-        project_name: Name tag for the instance
-        key_name: Name of the key pair to use
-        disk_size: Size of the root volume in GB
-
-    Returns:
-        tuple[str | None, str | None]: Instance ID and public IP if successful
-    """
+    """Deploy a new EC2 instance or start/return an existing one."""
     ec2 = boto3.resource("ec2", region_name=config.AWS_REGION)
     ec2_client = boto3.client("ec2", region_name=config.AWS_REGION)
 
-    # Check for existing instances first
+    logger.info(f"Checking for existing EC2 instance tagged: Name={project_name}")
     instances = ec2.instances.filter(
         Filters=[
-            {"Name": "tag:Name", "Values": [config.PROJECT_NAME]},
-            {
-                "Name": "instance-state-name",
-                "Values": ["running", "pending", "stopped"],
-            },
+            {"Name": "tag:Name", "Values": [project_name]},
+            # Look for non-terminated instances
+            {"Name": "instance-state-name", "Values": ["pending", "running", "shutting-down", "stopped", "stopping"]},
         ]
     )
 
     existing_instance = None
-    for instance in instances:
-        existing_instance = instance
-        if instance.state["Name"] == "running":
-            logger.info(
-                f"Instance already running: ID - {instance.id}, "
-                f"IP - {instance.public_ip_address}"
-            )
-            break
-        elif instance.state["Name"] == "stopped":
-            logger.info(f"Starting existing stopped instance: ID - {instance.id}")
-            ec2_client.start_instances(InstanceIds=[instance.id])
-            instance.wait_until_running()
-            instance.reload()
-            logger.info(
-                f"Instance started: ID - {instance.id}, "
-                f"IP - {instance.public_ip_address}"
-            )
-            break
+    instance_id = None
+    instance_ip = None
 
-    # If we found an existing instance, ensure we have its key
+    # Find the most recently launched suitable instance
+    sorted_instances = sorted(list(instances), key=lambda i: i.launch_time, reverse=True)
+
+    if sorted_instances:
+        existing_instance = sorted_instances[0]
+        instance_id = existing_instance.id
+        state = existing_instance.state["Name"]
+        logger.info(f"Found existing instance {instance_id} in state: {state}")
+
+        if state == "running":
+            instance_ip = existing_instance.public_ip_address
+            if not instance_ip:
+                 logger.warning(f"Instance {instance_id} is running but has no public IP. Waiting...")
+                 try:
+                     existing_instance.wait_until_running() # Might help refresh attributes
+                     existing_instance.reload()
+                     instance_ip = existing_instance.public_ip_address
+                     if not instance_ip:
+                          raise RuntimeError("Instance running but failed to get Public IP.")
+                 except Exception as e_wait_ip:
+                     logger.error(f"Failed to get Public IP for running instance {instance_id}: {e_wait_ip}")
+                     return None, None
+            logger.info(f"Instance already running: ID={instance_id}, IP={instance_ip}")
+        elif state == "stopped":
+            logger.info(f"Starting existing stopped instance: ID={instance_id}")
+            try:
+                ec2_client.start_instances(InstanceIds=[instance_id])
+                existing_instance.wait_until_running()
+                existing_instance.reload()
+                instance_ip = existing_instance.public_ip_address
+                if not instance_ip:
+                    raise RuntimeError(f"Instance {instance_id} started but has no public IP.")
+                logger.info(f"Instance started: ID={instance_id}, IP={instance_ip}")
+            except ClientError as e_start:
+                logger.error(f"Failed to start instance {instance_id}: {e_start}")
+                return None, None # Cannot proceed if start fails
+        elif state in ["pending", "stopping", "shutting-down"]:
+             logger.info(f"Instance {instance_id} is in state '{state}'. Waiting until running or stopped...")
+             try:
+                  # Wait until it's either running or stopped, then re-evaluate
+                  instance_waiter = ec2_client.get_waiter('instance_running')
+                  stop_waiter = ec2_client.get_waiter('instance_stopped')
+                  # This logic might need refinement depending on exact desired behavior for intermediate states
+                  # For now, let's just wait for it to become running
+                  instance_waiter.wait(InstanceIds=[instance_id], WaiterConfig={'Delay': 15, 'MaxAttempts': 40})
+                  existing_instance.reload()
+                  if existing_instance.state["Name"] == 'running':
+                       instance_ip = existing_instance.public_ip_address
+                       if not instance_ip: raise RuntimeError("Instance running but no public IP")
+                       logger.info(f"Instance now running: ID={instance_id}, IP={instance_ip}")
+                  else:
+                       # It reached some other state after waiting
+                       logger.error(f"Instance {instance_id} reached unexpected state '{existing_instance.state['Name']}' after waiting.")
+                       return None, None
+             except Exception as e_wait:
+                  logger.error(f"Error waiting for instance {instance_id} to reach stable state: {e_wait}")
+                  return None, None
+
+    # If we are using an existing instance, check for the key
     if existing_instance:
         if not os.path.exists(config.AWS_EC2_KEY_PATH):
-            logger.warning(
-                f"Key file {config.AWS_EC2_KEY_PATH} not found for existing instance."
-            )
-            logger.warning(
-                "You'll need to use the original key file to connect to this instance."
-            )
-            logger.warning(
-                "Consider terminating the instance with 'deploy.py stop' and starting "
-                "fresh."
-            )
-            return None, None
-        return existing_instance.id, existing_instance.public_ip_address
+            logger.error(f"Key file {config.AWS_EC2_KEY_PATH} not found for existing instance {instance_id}.")
+            logger.error("Cannot configure or connect without the key. Please ensure key exists or terminate and start fresh.")
+            return None, None # Cannot proceed without key
+        return instance_id, instance_ip
 
-    # No existing instance found, create new one with new key pair
+    # --- No suitable existing instance found, create a new one ---
+    logger.info("No suitable existing instance found. Creating a new one...")
     security_group_id = get_or_create_security_group_id()
     if not security_group_id:
-        logger.error(
-            "Unable to retrieve security group ID. Instance deployment aborted."
-        )
+        logger.error("Unable to get/create security group ID. Aborting deployment.")
         return None, None
 
-    # Create new key pair
+    # Create new key pair (delete old ones first for idempotency)
     try:
-        if os.path.exists(config.AWS_EC2_KEY_PATH):
-            logger.info(f"Removing existing key file {config.AWS_EC2_KEY_PATH}")
-            os.remove(config.AWS_EC2_KEY_PATH)
-
+        key_name_to_use = config.AWS_EC2_KEY_NAME
+        key_path_to_use = config.AWS_EC2_KEY_PATH
+        if os.path.exists(key_path_to_use):
+            logger.info(f"Removing existing local key file {key_path_to_use}")
+            os.remove(key_path_to_use)
         try:
-            ec2_client.delete_key_pair(KeyName=key_name)
-            logger.info(f"Deleted existing key pair {key_name}")
-        except ClientError:
-            pass  # Key pair doesn't exist, which is fine
-
-        if not create_key_pair(key_name):
-            logger.error("Failed to create key pair")
-            return None, None
+            logger.info(f"Attempting to delete key pair '{key_name_to_use}' from AWS (if exists)...")
+            ec2_client.delete_key_pair(KeyName=key_name_to_use)
+            logger.info(f"Deleted existing key pair '{key_name_to_use}' from AWS.")
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "InvalidKeyPair.NotFound":
+                 logger.warning(f"Could not delete key pair '{key_name_to_use}' from AWS: {e}")
+            else:
+                 logger.info(f"Key pair '{key_name_to_use}' not found in AWS.")
+        # Create the new key pair
+        if not create_key_pair(key_name_to_use, key_path_to_use):
+            raise RuntimeError("Failed to create new key pair")
     except Exception as e:
         logger.error(f"Error managing key pair: {e}")
         return None, None
 
-    # Create new instance with improved EBS configuration for gp3
-    ebs_config = {
-        "DeviceName": "/dev/sda1",
-        "Ebs": {
-            "VolumeSize": disk_size,
-            "VolumeType": "gp3",  # Explicitly set to gp3
-            "DeleteOnTermination": True,
-            "Iops": 3000,  # Default for gp3
-            "Throughput": 125,  # Default for gp3
-        },
-    }
-
-    new_instance = ec2.create_instances(
-        ImageId=ami,
-        MinCount=1,
-        MaxCount=1,
-        InstanceType=instance_type,
-        KeyName=key_name,
-        SecurityGroupIds=[security_group_id],
-        BlockDeviceMappings=[ebs_config],
-        TagSpecifications=[
-            {
-                "ResourceType": "instance",
-                "Tags": [{"Key": "Name", "Value": project_name}],
+    # Create new EC2 instance
+    try:
+        ebs_config = {
+            "DeviceName": "/dev/sda1", # Standard root device name for many Linux AMIs
+            "Ebs": {
+                "VolumeSize": disk_size,
+                "VolumeType": "gp3",
+                "DeleteOnTermination": True,
+                "Iops": 3000,
+                "Throughput": 125,
             },
-        ],
-    )[0]
+        }
+        logger.info(f"Launching new EC2 instance (AMI: {ami}, Type: {instance_type})...")
+        new_instance_resource = ec2.create_instances(
+            ImageId=ami,
+            MinCount=1,
+            MaxCount=1,
+            InstanceType=instance_type,
+            KeyName=key_name_to_use, # Use the key name we just created/verified
+            SecurityGroupIds=[security_group_id],
+            BlockDeviceMappings=[ebs_config],
+            TagSpecifications=[
+                {
+                    "ResourceType": "instance",
+                    "Tags": [{"Key": "Name", "Value": project_name}],
+                },
+                 { # Also tag the volume
+                    "ResourceType": "volume",
+                    "Tags": [{"Key": "Name", "Value": f"{project_name}-root-vol"}],
+                },
+            ],
+        )[0]
 
-    new_instance.wait_until_running()
-    new_instance.reload()
-    logger.info(
-        f"New instance created: ID - {new_instance.id}, "
-        f"IP - {new_instance.public_ip_address}"
-    )
-    return new_instance.id, new_instance.public_ip_address
+        instance_id = new_instance_resource.id
+        logger.info(f"New instance {instance_id} created. Waiting until running...")
+        new_instance_resource.wait_until_running()
+        new_instance_resource.reload()
+        instance_ip = new_instance_resource.public_ip_address
+        if not instance_ip:
+             raise RuntimeError(f"Instance {instance_id} started but has no public IP.")
+        logger.info(f"New instance running: ID={instance_id}, IP={instance_ip}")
+        return instance_id, instance_ip
+    except Exception as e:
+        logger.error(f"Failed to create or wait for EC2 instance: {e}")
+        if 'instance_id' in locals() and instance_id: # Check if instance object exists
+            try:
+                 logger.warning(f"Attempting to terminate partially created instance {instance_id}")
+                 # Use the resource object if available, otherwise use client
+                 if 'new_instance_resource' in locals() and new_instance_resource:
+                      new_instance_resource.terminate()
+                 else:
+                      ec2_client.terminate_instances(InstanceIds=[instance_id])
+                 logger.info(f"Issued terminate for {instance_id}")
+            except Exception as term_e:
+                 logger.error(f"Failed to terminate partially created instance {instance_id}: {term_e}")
+        return None, None
 
 
 def configure_ec2_instance(
-    instance_id: str | None = None,
-    instance_ip: str | None = None,
+    instance_id: str,
+    instance_ip: str,
     max_ssh_retries: int = 20,
     ssh_retry_delay: int = 20,
-    max_cmd_retries: int = 20,
-    cmd_retry_delay: int = 30,
-) -> tuple[str | None, str | None]:
-    """Configure an EC2 instance with necessary dependencies and Docker setup.
+    max_cmd_retries: int = 5,
+    cmd_retry_delay: int = 15,
+) -> bool:
+    """Configure the specified EC2 instance (install Docker, etc.)."""
 
-    This function either configures an existing EC2 instance specified by instance_id
-    and instance_ip, or deploys and configures a new instance. It installs Docker and
-    other required dependencies, and sets up the environment for running containers.
+    logger.info(f"Starting configuration for instance {instance_id} at {instance_ip}")
+    try:
+         key_path = config.AWS_EC2_KEY_PATH
+         if not os.path.exists(key_path):
+              logger.error(f"Key file not found at {key_path}. Cannot configure instance.")
+              return False
+         key = paramiko.RSAKey.from_private_key_file(key_path)
+    except Exception as e:
+         logger.error(f"Failed to load SSH key {key_path}: {e}")
+         return False
 
-    Args:
-        instance_id: Optional ID of an existing EC2 instance to configure.
-            If None, a new instance will be deployed.
-        instance_ip: Optional IP address of an existing EC2 instance.
-            Required if instance_id is provided.
-        max_ssh_retries: Maximum number of SSH connection attempts.
-            Defaults to 20 attempts.
-        ssh_retry_delay: Delay in seconds between SSH connection attempts.
-            Defaults to 20 seconds.
-        max_cmd_retries: Maximum number of command execution retries.
-            Defaults to 20 attempts.
-        cmd_retry_delay: Delay in seconds between command execution retries.
-            Defaults to 30 seconds.
+    ssh_client = None # Initialize to None
+    try:
+        ssh_client = paramiko.SSHClient()
+        ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-    Returns:
-        tuple[str | None, str | None]: A tuple containing:
-            - The instance ID (str) or None if configuration failed
-            - The instance's public IP address (str) or None if configuration failed
+        # --- SSH Connection Logic ---
+        logger.info("Attempting SSH connection...")
+        ssh_retries = 0
+        while ssh_retries < max_ssh_retries:
+            try:
+                ssh_client.connect(
+                    hostname=instance_ip, username=config.AWS_EC2_USER, pkey=key, timeout=20
+                )
+                logger.success("SSH connection established.")
+                break # Exit loop on success
+            except Exception as e:
+                ssh_retries += 1
+                logger.warning(f"SSH connection attempt {ssh_retries}/{max_ssh_retries} failed: {e}")
+                if ssh_retries < max_ssh_retries:
+                    logger.info(f"Retrying SSH connection in {ssh_retry_delay} seconds...")
+                    time.sleep(ssh_retry_delay)
+                else:
+                    logger.error("Maximum SSH connection attempts reached. Configuration aborted.")
+                    return False # Return failure
 
-    Raises:
-        RuntimeError: If command execution fails
-        paramiko.SSHException: If SSH connection fails
-        Exception: For other unexpected errors during configuration
-    """
-    if not instance_id:
-        ec2_instance_id, ec2_instance_ip = deploy_ec2_instance()
-    else:
-        ec2_instance_id = instance_id
-        ec2_instance_ip = instance_ip
+        # --- Instance Setup Commands ---
+        commands = [
+            "sudo apt-get update -y",
+            "sudo apt-get install -y ca-certificates curl gnupg apt-transport-https", # Ensure https transport
+            "sudo install -m 0755 -d /etc/apt/keyrings",
+            # Use non-deprecated method for adding Docker GPG key with non-interactive flags
+            "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor --batch --yes -o /etc/apt/keyrings/docker.gpg",
+            "sudo chmod a+r /etc/apt/keyrings/docker.gpg",
+            ( # Use lsb_release for codename reliably
+                'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] '
+                'https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | '
+                'sudo tee /etc/apt/sources.list.d/docker.list > /dev/null'
+            ),
+            "sudo apt-get update -y",
+            # Install specific components needed
+            "sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin",
+            "sudo systemctl start docker",
+            "sudo systemctl enable docker",
+            # Add user to docker group - requires new login/session to take effect for user directly, but sudo works
+            f"sudo usermod -aG docker {config.AWS_EC2_USER}",
+        ]
 
-    key = paramiko.RSAKey.from_private_key_file(config.AWS_EC2_KEY_PATH)
-    ssh_client = paramiko.SSHClient()
-    ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
-    ssh_retries = 0
-    while ssh_retries < max_ssh_retries:
-        try:
-            ssh_client.connect(
-                hostname=ec2_instance_ip, username=config.AWS_EC2_USER, pkey=key
+        for command in commands:
+            # logger.info(f"Executing: {command}") # execute_command already logs
+            # Use execute_command helper for better output handling and retries
+            execute_command(
+                 ssh_client, command,
+                 max_retries=max_cmd_retries,
+                 retry_delay=cmd_retry_delay
             )
-            break
-        except Exception as e:
-            ssh_retries += 1
-            logger.error(f"SSH connection attempt {ssh_retries} failed: {e}")
-            if ssh_retries < max_ssh_retries:
-                logger.info(f"Retrying SSH connection in {ssh_retry_delay} seconds...")
-                time.sleep(ssh_retry_delay)
-            else:
-                logger.error("Maximum SSH connection attempts reached. Aborting.")
-                return None, None
+        logger.success("Instance OS configuration commands completed.")
+        return True # Configuration successful
 
-    commands = [
-        "sudo apt-get update",
-        "sudo apt-get install -y ca-certificates curl gnupg",
-        "sudo install -m 0755 -d /etc/apt/keyrings",
-        (
-            "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | "
-            "sudo dd of=/etc/apt/keyrings/docker.gpg"
-        ),
-        "sudo chmod a+r /etc/apt/keyrings/docker.gpg",
-        (
-            'echo "deb [arch="$(dpkg --print-architecture)" '
-            "signed-by=/etc/apt/keyrings/docker.gpg] "
-            "https://download.docker.com/linux/ubuntu "
-            '"$(. /etc/os-release && echo "$VERSION_CODENAME")" stable" | '
-            "sudo tee /etc/apt/sources.list.d/docker.list > /dev/null"
-        ),
-        "sudo apt-get update",
-        (
-            "sudo apt-get install -y docker-ce docker-ce-cli containerd.io "
-            "docker-buildx-plugin docker-compose-plugin"
-        ),
-        "sudo systemctl start docker",
-        "sudo systemctl enable docker",
-        "sudo usermod -a -G docker ${USER}",
-        "sudo docker system prune -af --volumes",
-        f"sudo docker rm -f {config.PROJECT_NAME}-container || true",
-    ]
+    except Exception as e:
+        logger.error(f"Failed during instance configuration: {e}", exc_info=True)
+        return False # Configuration failed
+    finally:
+        if ssh_client:
+            ssh_client.close()
+            logger.info("SSH connection closed during configure_ec2_instance.")
 
-    for command in commands:
-        logger.info(f"Executing command: {command}")
-        cmd_retries = 0
-        while cmd_retries < max_cmd_retries:
-            stdin, stdout, stderr = ssh_client.exec_command(command)
+
+def execute_command(
+    ssh_client: paramiko.SSHClient,
+    command: str,
+    max_retries: int = 3,
+    retry_delay: int = 10,
+    timeout: int = config.COMMAND_TIMEOUT # Use timeout from config
+) -> Tuple[int, str, str]: # Return status, stdout, stderr
+    """Execute a command via SSH with retries for specific errors."""
+    logger.info(f"Executing SSH command: {command[:100]}{'...' if len(command)>100 else ''}")
+    attempt = 0
+    while attempt < max_retries:
+        attempt += 1
+        try:
+            stdin, stdout, stderr = ssh_client.exec_command(
+                 command, timeout=timeout, get_pty=False # Try without PTY first
+            )
+            # It's crucial to wait for the command to finish *before* reading streams fully
             exit_status = stdout.channel.recv_exit_status()
 
+            # Read output streams completely after command exit
+            stdout_output = stdout.read().decode("utf-8", errors="replace").strip()
+            stderr_output = stderr.read().decode("utf-8", errors="replace").strip()
+
+            if stdout_output:
+                 logger.debug(f"STDOUT:\n{stdout_output}")
+            if stderr_output:
+                 if exit_status == 0:
+                      logger.warning(f"STDERR (Exit Status 0):\n{stderr_output}")
+                 else:
+                      logger.error(f"STDERR (Exit Status {exit_status}):\n{stderr_output}")
+
+            # Check exit status and potential retry conditions
             if exit_status == 0:
-                logger.info("Command executed successfully")
-                break
+                logger.success(f"Command successful (attempt {attempt}): {command[:50]}...")
+                return exit_status, stdout_output, stderr_output # Success
+
+            # Specific Retry Condition: dpkg lock
+            if "Could not get lock" in stderr_output or "dpkg frontend is locked" in stderr_output:
+                 logger.warning(f"Command failed due to dpkg lock (attempt {attempt}/{max_retries}). Retrying in {retry_delay}s...")
+                 if attempt < max_retries:
+                      time.sleep(retry_delay)
+                      continue # Go to next attempt
+                 else:
+                      # Max retries reached for lock
+                      error_msg = f"Command failed after {max_retries} attempts due to dpkg lock: {command}"
+                      logger.error(error_msg)
+                      raise RuntimeError(error_msg) # Final failure after retries
             else:
-                error_message = stderr.read()
-                if "Could not get lock" in str(error_message):
-                    cmd_retries += 1
-                    logger.warning(
-                        f"dpkg is locked, retrying in {cmd_retry_delay} seconds... "
-                        f"Attempt {cmd_retries}/{max_cmd_retries}"
-                    )
-                    time.sleep(cmd_retry_delay)
-                else:
-                    logger.error(
-                        f"Error in command: {command}, Exit Status: {exit_status}, "
-                        f"Error: {error_message}"
-                    )
-                    break
+                 # Other non-zero exit status, fail immediately
+                 error_msg = f"Command failed with exit status {exit_status} (attempt {attempt}): {command}"
+                 logger.error(error_msg)
+                 raise RuntimeError(error_msg) # Final failure
 
-    ssh_client.close()
-    return ec2_instance_id, ec2_instance_ip
+        except Exception as e:
+             # Catch other potential errors like timeouts
+             logger.error(f"Exception during command execution (attempt {attempt}): {e}")
+             if attempt < max_retries:
+                  logger.info(f"Retrying command after exception in {retry_delay}s...")
+                  time.sleep(retry_delay)
+             else:
+                  logger.error(f"Command failed after {max_retries} attempts due to exception: {command}")
+                  raise # Reraise the last exception
 
-
-def execute_command(ssh_client: paramiko.SSHClient, command: str) -> None:
-    """Execute a command and handle its output safely."""
-    logger.info(f"Executing: {command}")
-    stdin, stdout, stderr = ssh_client.exec_command(
-        command,
-        timeout=config.COMMAND_TIMEOUT,
-        # get_pty=True
-    )
-
-    # Stream output in real-time
-    while not stdout.channel.exit_status_ready():
-        if stdout.channel.recv_ready():
-            try:
-                line = stdout.channel.recv(1024).decode("utf-8", errors="replace")
-                if line.strip():  # Only log non-empty lines
-                    logger.info(line.strip())
-            except Exception as e:
-                logger.warning(f"Error decoding stdout: {e}")
-
-        if stdout.channel.recv_stderr_ready():
-            try:
-                line = stdout.channel.recv_stderr(1024).decode(
-                    "utf-8", errors="replace"
-                )
-                if line.strip():  # Only log non-empty lines
-                    logger.error(line.strip())
-            except Exception as e:
-                logger.warning(f"Error decoding stderr: {e}")
-
-    exit_status = stdout.channel.recv_exit_status()
-
-    # Capture any remaining output
-    try:
-        remaining_stdout = stdout.read().decode("utf-8", errors="replace")
-        if remaining_stdout.strip():
-            logger.info(remaining_stdout.strip())
-    except Exception as e:
-        logger.warning(f"Error decoding remaining stdout: {e}")
-
-    try:
-        remaining_stderr = stderr.read().decode("utf-8", errors="replace")
-        if remaining_stderr.strip():
-            logger.error(remaining_stderr.strip())
-    except Exception as e:
-        logger.warning(f"Error decoding remaining stderr: {e}")
-
-    if exit_status != 0:
-        error_msg = f"Command failed with exit status {exit_status}: {command}"
-        logger.error(error_msg)
-        raise RuntimeError(error_msg)
-
-    logger.info(f"Successfully executed: {command}")
+    # This line should not be reachable if logic is correct
+    raise RuntimeError(f"Command failed after exhausting retries: {command}")
 
 
+# Updated create_auto_shutdown_infrastructure function
 def create_auto_shutdown_infrastructure(instance_id: str) -> None:
     """Create CloudWatch Alarm and Lambda function for CPU inactivity based auto-shutdown."""
     lambda_client = boto3.client("lambda", region_name=config.AWS_REGION)
-    # events_client = boto3.client("events", region_name=config.AWS_REGION) # No longer needed
     iam_client = boto3.client("iam", region_name=config.AWS_REGION)
-    cloudwatch_client = boto3.client('cloudwatch', region_name=config.AWS_REGION) # Ensure client is available
+    cloudwatch_client = boto3.client('cloudwatch', region_name=config.AWS_REGION)
 
-    role_name = f"{config.PROJECT_NAME}-lambda-role"
-    lambda_function_name = LAMBDA_FUNCTION_NAME # Use constant from top of file
+    role_name = IAM_ROLE_NAME # Use constant
+    lambda_function_name = LAMBDA_FUNCTION_NAME
     alarm_name = f"{config.PROJECT_NAME}-CPU-Low-Alarm-{instance_id}" # Unique alarm name
 
-    # --- Create or Get IAM Role (keep this part mostly the same) ---
+    logger.info("Setting up auto-shutdown infrastructure (Alarm-based)...")
+
+    # --- Create or Get IAM Role ---
+    role_arn = None
     try:
-        assume_role_policy = { ... } # Keep existing policy document
+        assume_role_policy = {
+           "Version": "2012-10-17",
+           "Statement": [{
+               "Effect": "Allow",
+               "Principal": {"Service": "lambda.amazonaws.com"},
+               "Action": "sts:AssumeRole",
+           }],
+        }
+        logger.info(f"Attempting to create/get IAM role: {role_name}")
         response = iam_client.create_role(
             RoleName=role_name, AssumeRolePolicyDocument=json.dumps(assume_role_policy)
         )
         role_arn = response["Role"]["Arn"]
-        # Attach policies (keep existing)
-        iam_client.attach_role_policy(RoleName=role_name, PolicyArn="arn:aws:iam::aws:policy/AmazonEC2FullAccess")
-        iam_client.attach_role_policy(RoleName=role_name, PolicyArn="arn:aws:iam::aws:policy/CloudWatchLogsFullAccess")
-        logger.info(f"Created IAM role {role_name}: {role_arn}")
-        time.sleep(10) # Wait for role propagation
+        logger.info(f"Created IAM role {role_name}. Attaching policies...")
+        # Attach policies needed by Lambda
+        iam_client.attach_role_policy(RoleName=role_name, PolicyArn="arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole")
+        iam_client.attach_role_policy(RoleName=role_name, PolicyArn="arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess")
+        iam_client.attach_role_policy(RoleName=role_name, PolicyArn="arn:aws:iam::aws:policy/AmazonEC2FullAccess") # Consider reducing scope later
+
+        logger.info(f"Attached policies to IAM role {role_name}")
+        logger.info("Waiting for IAM role propagation...")
+        time.sleep(15) # Increased wait time for IAM propagation
     except ClientError as e:
         if e.response["Error"]["Code"] == "EntityAlreadyExists":
             logger.info(f"IAM role {role_name} already exists, retrieving ARN...")
-            response = iam_client.get_role(RoleName=role_name)
-            role_arn = response["Role"]["Arn"]
+            try:
+                 response = iam_client.get_role(RoleName=role_name)
+                 role_arn = response["Role"]["Arn"]
+                 # Optional: Verify/attach policies if needed, though typically done at creation
+            except ClientError as get_e:
+                 logger.error(f"Failed to get existing IAM role {role_name}: {get_e}")
+                 logger.error("Cannot proceed with auto-shutdown setup without IAM role ARN.")
+                 return # Stop setup
         else:
             logger.error(f"Error creating/getting IAM role {role_name}: {e}")
-            return # Cannot proceed without role
+            logger.error("Cannot proceed with auto-shutdown setup without IAM role.")
+            return # Stop setup
 
-    # --- Define Updated Lambda Function Code ---
+    if not role_arn:
+         logger.error("Failed to obtain IAM role ARN. Aborting auto-shutdown setup.")
+         return
+
+    # Inside the lambda_code f-string:
     lambda_code = f"""
 import boto3
 import os
 import json
 
+INSTANCE_ID = os.environ.get('INSTANCE_ID')
+# AWS_REGION = os.environ.get('AWS_REGION') # <-- Remove this line
+
+print(f"Lambda invoked. Checking instance: {{INSTANCE_ID}}") # Removed region here
+
 def lambda_handler(event, context):
- # Get instance ID and region from environment variables
- instance_id = os.environ.get('INSTANCE_ID')
- aws_region = os.environ.get('AWS_REGION')
- if not instance_id or not aws_region:
-     print("Error: INSTANCE_ID or AWS_REGION environment variable not set.")
-     return {{'statusCode': 500, 'body': json.dumps('Configuration error')}}
+    if not INSTANCE_ID: # <-- Modified check
+        print("Error: INSTANCE_ID environment variable not set.")
+        return {{'statusCode': 500, 'body': json.dumps('Configuration error')}}
 
- ec2 = boto3.client('ec2', region_name=aws_region)
- # The alarm triggered, meaning CPU was low for the duration.
- # Double check state before stopping.
- print(f"Inactivity Alarm triggered for instance: {{instance_id}}. Checking state...")
-
- try:
-     response = ec2.describe_instances(InstanceIds=[instance_id])
-     if not response['Reservations']:
-          print(f"Instance {{instance_id}} not found.")
-          return {{'statusCode': 404, 'body': json.dumps('Instance not found')}}
-
-     instance_data = response['Reservations'][0]['Instances'][0]
-     state = instance_data['State']['Name']
-
-     # Only stop if it's actually running (prevents errors if already stopping/stopped)
-     if state == 'running':
-         print(f"Instance {{instance_id}} is running. Stopping due to inactivity alarm.")
-         ec2.stop_instances(InstanceIds=[instance_id])
-         print(f"Stop command issued for {{instance_id}}.")
-         return {{'statusCode': 200, 'body': json.dumps('Instance stop initiated')}}
-     else:
-         print(f"Instance {{instance_id}} is already in state '{{state}}'. No action taken.")
-         return {{'statusCode': 200, 'body': json.dumps('Instance not running')}}
- except Exception as e:
-     print(f"Error interacting with EC2: {{str(e)}}")
-     return {{'statusCode': 500, 'body': json.dumps(f'Error: {{str(e)}}')}}
+    # boto3 automatically uses the Lambda execution region if not specified
+    ec2 = boto3.client('ec2') # <-- Removed region_name=AWS_REGION
+    print(f"Inactivity Alarm triggered for instance: {{INSTANCE_ID}}. Checking state...")
+    # ... rest of the lambda code remains the same ...
+    try:
+        response = ec2.describe_instances(InstanceIds=[INSTANCE_ID])
+        # ... (existing logic) ...
+    except Exception as e:
+        print(f"Error interacting with EC2 for instance {{INSTANCE_ID}}: {{str(e)}}")
+        return {{'statusCode': 500, 'body': json.dumps(f'Error: {{str(e)}}')}}
 """
 
-    # --- Create or Update Lambda Function (Add Environment Variables) ---
+    # --- Create or Update Lambda Function ---
+    lambda_arn = None # Initialize
     try:
+        logger.info(f"Preparing Lambda function code for {lambda_function_name}...")
         zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, "a") as zip_file:
-            zip_file.writestr("lambda_function.py", lambda_code)
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file: # Use 'w' for new zip
+            zip_file.writestr("lambda_function.py", lambda_code.encode('utf-8'))
         zip_content = zip_buffer.getvalue()
 
-        env_vars = {'Variables': {'INSTANCE_ID': instance_id, 'AWS_REGION': config.AWS_REGION}}
+        env_vars = {'Variables': {'INSTANCE_ID': instance_id}}
 
         try:
-             # Try updating existing function first
-             response = lambda_client.update_function_code(FunctionName=lambda_function_name, ZipFile=zip_content)
-             lambda_client.update_function_configuration(FunctionName=lambda_function_name, Role=role_arn, Environment=env_vars, Timeout=30, MemorySize=128)
-             logger.info(f"Updated Lambda function: {lambda_function_name}")
-             lambda_arn = response['FunctionArn'] # ARN doesn't change on update
-             # Need to get ARN if update worked but didn't return it directly in response
-             if 'FunctionArn' not in response:
-                  func_config = lambda_client.get_function_configuration(FunctionName=lambda_function_name)
-                  lambda_arn = func_config['FunctionArn']
+            logger.info(f"Checking for existing Lambda function: {lambda_function_name}")
+            func_config = lambda_client.get_function_configuration(FunctionName=lambda_function_name)
+            lambda_arn = func_config['FunctionArn'] # Get ARN if exists
+            logger.info(f"Found existing Lambda. Updating code and configuration...")
+            lambda_client.update_function_code(FunctionName=lambda_function_name, ZipFile=zip_content)
+            lambda_client.update_function_configuration(FunctionName=lambda_function_name, Role=role_arn, Environment=env_vars, Timeout=30, MemorySize=128)
+            logger.info(f"Updated Lambda function: {lambda_function_name}")
 
         except ClientError as e:
-             if e.response['Error']['Code'] == 'ResourceNotFoundException':
-                  # Function doesn't exist, create it
-                  response = lambda_client.create_function(
-                      FunctionName=lambda_function_name,
-                      Runtime="python3.9", # Or newer if needed
-                      Role=role_arn,
-                      Handler="lambda_function.lambda_handler",
-                      Code={"ZipFile": zip_content},
-                      Timeout=30,
-                      MemorySize=128,
-                      Description=f"Auto-shutdown function for {config.PROJECT_NAME} instance {instance_id}",
-                      Environment=env_vars,
-                      Tags={'Project': config.PROJECT_NAME} # Optional tag
-                  )
-                  lambda_arn = response["FunctionArn"]
-                  logger.info(f"Created Lambda function: {lambda_arn}")
-             else:
-                  raise # Reraise other errors
+            if e.response['Error']['Code'] == 'ResourceNotFoundException':
+                logger.info(f"Lambda function {lambda_function_name} not found. Creating...")
+                response = lambda_client.create_function(
+                    FunctionName=lambda_function_name,
+                    Runtime="python3.9", # Ensure this runtime is supported/desired
+                    Role=role_arn,
+                    Handler="lambda_function.lambda_handler",
+                    Code={"ZipFile": zip_content},
+                    Timeout=30,
+                    MemorySize=128,
+                    Description=f"Auto-shutdown function for {config.PROJECT_NAME} instance {instance_id}",
+                    Environment=env_vars,
+                    Tags={'Project': config.PROJECT_NAME} # Tag for easier identification
+                )
+                lambda_arn = response["FunctionArn"]
+                logger.info(f"Created Lambda function: {lambda_arn}")
+                # Need to wait for function to be fully active before creating alarm/permissions
+                logger.info("Waiting for Lambda function to become active...")
+                waiter = lambda_client.get_waiter('function_active_v2')
+                waiter.wait(FunctionName=lambda_function_name)
+                logger.info("Lambda function is active.")
+            else:
+                raise # Reraise other ClientErrors during get/update/create
 
-        # --- Remove Old CloudWatch Events Rule (if it exists) ---
+        if not lambda_arn:
+             raise RuntimeError("Failed to get Lambda Function ARN after create/update.")
+
+        # --- Remove Old CloudWatch Events Rule and Permissions (Idempotent) ---
+        # (Keep this cleanup from previous fix)
         try:
-             events_client = boto3.client("events", region_name=config.AWS_REGION)
-             # Need rule name from config or constant
-             rule_name = CLOUDWATCH_RULE_NAME # From top of file
-             try:
-                  events_client.remove_targets(Rule=rule_name, Ids=["1"], Force=True)
-             except ClientError as e:
-                  if e.response['Error']['Code'] != 'ResourceNotFoundException':
-                       logger.warning(f"Could not remove targets from rule {rule_name}: {e}")
-             events_client.delete_rule(Name=rule_name)
-             logger.info(f"Deleted old CloudWatch Events rule: {rule_name} (if it existed)")
-        except ClientError as e:
-             if e.response["Error"]["Code"] != "ResourceNotFoundException":
-                  logger.warning(f"Error deleting old CloudWatch Events rule {rule_name}: {e}")
+            events_client = boto3.client("events", region_name=config.AWS_REGION)
+            rule_name = CLOUDWATCH_RULE_NAME # Old constant
+            logger.info(f"Attempting to cleanup old Event rule/targets for: {rule_name}")
+            try: events_client.remove_targets(Rule=rule_name, Ids=["1"], Force=True)
+            except ClientError as e_rem: logger.debug(f"Ignoring error removing targets: {e_rem}")
+            try: events_client.delete_rule(Name=rule_name)
+            except ClientError as e_del: logger.debug(f"Ignoring error deleting rule: {e_del}")
+            logger.info(f"Cleaned up old CloudWatch Events rule: {rule_name} (if it existed)")
+        except Exception as e_ev_clean: logger.warning(f"Issue during old Event rule cleanup: {e_ev_clean}")
+        try:
+            logger.info("Attempting to remove old CloudWatch Events Lambda permission...")
+            lambda_client.remove_permission(FunctionName=lambda_function_name, StatementId=f"{config.PROJECT_NAME}-cloudwatch-trigger")
+            logger.info("Removed old CloudWatch Events permission from Lambda.")
+        except ClientError as e_perm:
+            if e_perm.response['Error']['Code'] != 'ResourceNotFoundException': logger.warning(f"Could not remove old Lambda permission: {e_perm}")
+            else: logger.info("Old Lambda permission not found.")
+
 
         # --- Create New CloudWatch Alarm ---
-        # Calculate evaluation periods based on timeout and 5-min period
         evaluation_periods = max(1, config.INACTIVITY_TIMEOUT_MINUTES // 5)
-        logger.info(f"Setting up alarm for < 5% CPU over {evaluation_periods * 5} minutes.")
+        threshold_cpu = 5.0
+        logger.info(f"Setting up CloudWatch alarm '{alarm_name}' for CPU < {threshold_cpu}% over {evaluation_periods * 5} minutes.")
 
         try:
-             # Delete existing alarm first for idempotency
-             try:
-                  cloudwatch_client.delete_alarms(AlarmNames=[alarm_name])
-                  logger.info(f"Deleted potentially existing CloudWatch alarm: {alarm_name}")
-             except ClientError as e:
-                  if e.response['Error']['Code'] != 'ResourceNotFound':
-                       logger.warning(f"Could not delete existing alarm {alarm_name}: {e}")
+            # Delete existing alarm first for idempotency
+            try:
+                cloudwatch_client.delete_alarms(AlarmNames=[alarm_name])
+                logger.info(f"Deleted potentially existing CloudWatch alarm: {alarm_name}")
+            except ClientError as e:
+                if e.response['Error']['Code'] != 'ResourceNotFoundException':
+                    logger.warning(f"Could not delete existing alarm {alarm_name} before creation: {e}")
 
-             cloudwatch_client.put_metric_alarm(
-                 AlarmName=alarm_name,
-                 AlarmDescription=f'Stop EC2 instance {instance_id} if avg CPU < 5% for {evaluation_periods * 5} mins',
-                 ActionsEnabled=True,
-                 AlarmActions=[lambda_arn], # Set Lambda function ARN as action
-                 MetricName='CPUUtilization',
-                 Namespace='AWS/EC2',
-                 Statistic='Average',
-                 Dimensions=[{'Name': 'InstanceId', 'Value': instance_id}],
-                 Period=300,  # 300 seconds = 5 minutes
-                 EvaluationPeriods=evaluation_periods,
-                 Threshold=5.0,
-                 ComparisonOperator='LessThanThreshold',
-                 TreatMissingData='breaching', # Treat missing data as low CPU (safer for shutdown)
-                 Tags=[{'Key': 'Project', 'Value': config.PROJECT_NAME}]
-             )
-             logger.info(f"Created/Updated CloudWatch Alarm '{alarm_name}' triggering Lambda on low CPU.")
-
-             # Permissions for CloudWatch Alarms to invoke Lambda are usually handled
-             # automatically when setting AlarmActions. We remove the old event permission.
-             try:
-                  lambda_client.remove_permission(
-                      FunctionName=lambda_function_name,
-                      StatementId=f"{config.PROJECT_NAME}-cloudwatch-trigger" # Old ID used for event rule
-                  )
-                  logger.info("Removed old CloudWatch Events permission from Lambda.")
-             except ClientError as e:
-                  if e.response['Error']['Code'] != 'ResourceNotFoundException':
-                       logger.warning(f"Could not remove old Lambda permission: {e}")
+            cloudwatch_client.put_metric_alarm(
+                AlarmName=alarm_name,
+                AlarmDescription=f'Stop EC2 instance {instance_id} if avg CPU < {threshold_cpu}% for {evaluation_periods * 5} mins',
+                ActionsEnabled=True,
+                AlarmActions=[lambda_arn], # Trigger Lambda function
+                MetricName='CPUUtilization',
+                Namespace='AWS/EC2',
+                Statistic='Average',
+                Dimensions=[{'Name': 'InstanceId', 'Value': instance_id}],
+                Period=300,  # 5 minutes period
+                EvaluationPeriods=evaluation_periods,
+                Threshold=threshold_cpu,
+                ComparisonOperator='LessThanThreshold',
+                TreatMissingData='breaching',
+                Tags=[{'Key': 'Project', 'Value': config.PROJECT_NAME}]
+            )
+            logger.info(f"Created/Updated CloudWatch Alarm '{alarm_name}' triggering Lambda on low CPU.")
 
         except Exception as e:
-             logger.error(f"Failed to create/update CloudWatch alarm: {e}")
-             # Consider if deployment should fail here or just warn
+            logger.error(f"Failed to create/update CloudWatch alarm '{alarm_name}': {e}")
+            # Decide if this failure should stop the deployment
 
-        logger.info(f"Auto-shutdown infrastructure updated successfully for {instance_id=}")
+        logger.success(f"Auto-shutdown infrastructure setup attempted for {instance_id=}")
 
     except Exception as e:
         logger.error(f"Error setting up auto-shutdown infrastructure: {e}", exc_info=True)
+        # Do not raise here, allow deployment to continue but log the failure
 
 
 class Deploy:
     """Class handling deployment operations for OmniParser."""
 
     @staticmethod
-    def start() -> None:
-        """Start a new deployment of OmniParser on EC2."""
+    def start() -> Tuple[str | None, str | None]: # Added return type hint
+        """
+        Start or configure EC2 instance, setup auto-shutdown, deploy OmniParser container.
+        Returns the public IP and instance ID on success, or (None, None) on failure.
+        """
+        instance_id = None
+        instance_ip = None
+        ssh_client = None
+        key_path = config.AWS_EC2_KEY_PATH
+
         try:
-            instance_id, instance_ip = configure_ec2_instance()
+            # 1. Deploy or find/start EC2 instance
+            logger.info("Step 1: Deploying/Starting EC2 Instance...")
+            instance_id, instance_ip = deploy_ec2_instance()
             if not instance_id or not instance_ip:
-                logger.error("Failed to deploy or configure EC2 instance")
-                return
+                 # deploy_ec2_instance already logs the error
+                 raise RuntimeError("Failed to deploy or start EC2 instance")
+            logger.success(f"EC2 instance ready: ID={instance_id}, IP={instance_ip}")
 
-            # Set up auto-shutdown infrastructure
+            # 2. Configure EC2 Instance (Docker etc.)
+            logger.info("Step 2: Configuring EC2 Instance (Docker, etc.)...")
+            if not os.path.exists(key_path):
+                logger.error(f"SSH Key not found at {key_path}. Cannot proceed with configuration.")
+                raise RuntimeError(f"SSH Key missing: {key_path}")
+            config_success = configure_ec2_instance(instance_id, instance_ip)
+            if not config_success:
+                 # configure_ec2_instance already logs the error
+                 raise RuntimeError("Failed to configure EC2 instance")
+            logger.success("EC2 instance configuration complete.")
+
+            # 3. Set up Auto-Shutdown Infrastructure (Alarm-based)
+            logger.info("Step 3: Setting up Auto-Shutdown Infrastructure...")
+            # This function now handles errors internally and logs them but doesn't stop deployment
             create_auto_shutdown_infrastructure(instance_id)
+            # Success/failure logged within the function
 
-            # Trigger driver installation via login shell
-            Deploy.ssh(non_interactive=True)
+            # 4. Trigger Driver Installation via Non-Interactive SSH Login
+            logger.info("Step 4: Triggering potential driver install via SSH login (might cause temporary disconnect)...")
+            try:
+                 Deploy.ssh(non_interactive=True)
+                 logger.success("Non-interactive SSH login trigger completed.")
+            except Exception as ssh_e:
+                 logger.warning(f"Non-interactive SSH step failed or timed out: {ssh_e}")
+                 logger.warning("Proceeding with Docker deployment, assuming instance is accessible.")
 
-            # Get the directory containing deploy.py
+            # 5. Copy Dockerfile, .dockerignore
+            logger.info("Step 5: Copying Docker related files...")
             current_dir = os.path.dirname(os.path.abspath(__file__))
-
-            # Define files to copy
             files_to_copy = {
                 "Dockerfile": os.path.join(current_dir, "Dockerfile"),
                 ".dockerignore": os.path.join(current_dir, ".dockerignore"),
             }
-
-            # Copy files to instance
             for filename, filepath in files_to_copy.items():
                 if os.path.exists(filepath):
-                    logger.info(f"Copying {filename} to instance...")
-                    subprocess.run(
-                        [
-                            "scp",
-                            "-i",
-                            config.AWS_EC2_KEY_PATH,
-                            "-o",
-                            "StrictHostKeyChecking=no",
-                            filepath,
-                            f"{config.AWS_EC2_USER}@{instance_ip}:~/{filename}",
-                        ],
-                        check=True,
-                    )
+                    logger.info(f"Copying {filename} to instance {instance_ip}...")
+                    scp_command = [
+                        "scp", "-i", key_path,
+                        "-o", "StrictHostKeyChecking=no",
+                        "-o", "UserKnownHostsFile=/dev/null",
+                        "-o", "ConnectTimeout=30",
+                        filepath, f"{config.AWS_EC2_USER}@{instance_ip}:~/{filename}",
+                    ]
+                    result = subprocess.run(scp_command, check=False, capture_output=True, text=True, timeout=60)
+                    if result.returncode != 0:
+                         logger.error(f"Failed to copy {filename}: {result.stderr or result.stdout}")
+                         # Allow continuing even if copy fails? Or raise error? Let's allow for now.
+                    else:
+                         logger.info(f"Successfully copied {filename}.")
                 else:
-                    logger.warning(f"File not found: {filepath}")
+                    logger.warning(f"Required file not found: {filepath}. Skipping copy.")
 
-            # Connect to instance and execute commands
-            key = paramiko.RSAKey.from_private_key_file(config.AWS_EC2_KEY_PATH)
+            # 6. Connect SSH and Run Setup/Docker Commands
+            logger.info("Step 6: Connecting via SSH to run setup and Docker commands...")
+            key = paramiko.RSAKey.from_private_key_file(key_path)
             ssh_client = paramiko.SSHClient()
             ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
             try:
-                logger.info(f"Connecting to {instance_ip}...")
-                ssh_client.connect(
-                    hostname=instance_ip,
-                    username=config.AWS_EC2_USER,
-                    pkey=key,
-                    timeout=30,
-                )
+                logger.info(f"Attempting final SSH connection to {instance_ip}...")
+                ssh_client.connect(hostname=instance_ip, username=config.AWS_EC2_USER, pkey=key, timeout=30)
+                logger.success("SSH connected for Docker setup.")
 
-                setup_commands = [
-                    "rm -rf OmniParser",  # Clean up any existing repo
-                    f"git clone {config.REPO_URL}",
-                    "cp Dockerfile .dockerignore OmniParser/",
+                setup_commands = [ # Ensure commands are safe and idempotent if possible
+                    "rm -rf OmniParser",
+                    f"git clone --depth 1 {config.REPO_URL}",
+                    "if [ -f ~/Dockerfile ]; then cp ~/Dockerfile ~/OmniParser/; else echo 'Warning: Dockerfile not found in home dir'; fi",
+                    "if [ -f ~/.dockerignore ]; then cp ~/.dockerignore ~/OmniParser/; else echo 'Warning: .dockerignore not found in home dir'; fi"
                 ]
-
-                # Execute setup commands
                 for command in setup_commands:
-                    logger.info(f"Executing setup command: {command}")
                     execute_command(ssh_client, command)
 
-                # Build and run Docker container
                 docker_commands = [
-                    # Remove any existing container
                     f"sudo docker rm -f {config.CONTAINER_NAME} || true",
-                    # Remove any existing image
                     f"sudo docker rmi {config.PROJECT_NAME} || true",
-                    # Build new image
-                    (
-                        "cd OmniParser && sudo docker build --progress=plain "
-                        f"-t {config.PROJECT_NAME} ."
-                    ),
-                    # Run new container
-                    (
-                        "sudo docker run -d -p 8000:8000 --gpus all --name "
-                        f"{config.CONTAINER_NAME} {config.PROJECT_NAME}"
-                    ),
+                    (f"cd OmniParser && sudo docker build --progress=plain "
+                     f"--no-cache -t {config.PROJECT_NAME} ."),
+                    (f"sudo docker run -d -p {config.PORT}:{config.PORT} --gpus all --name "
+                     f"{config.CONTAINER_NAME} {config.PROJECT_NAME}")
                 ]
-
-                # Execute Docker commands
                 for command in docker_commands:
-                    logger.info(f"Executing Docker command: {command}")
                     execute_command(ssh_client, command)
+                logger.success("Docker build and run commands executed.")
 
-                # Wait for container to start and check its logs
-                logger.info("Waiting for container to start...")
-                time.sleep(10)  # Give container time to start
-                execute_command(ssh_client, f"docker logs {config.CONTAINER_NAME}")
-
-                # Wait for server to become responsive
-                logger.info("Waiting for server to become responsive...")
-                max_retries = 30
-                retry_delay = 10
-                server_ready = False
-
+                # 7. Wait for Container/Server to Become Responsive
+                logger.info("Step 7: Waiting for server inside container to become responsive...")
+                max_retries = 30; retry_delay = 10; server_ready = False
+                check_command = f"curl -s --fail http://localhost:{config.PORT}/probe/ || exit 1"
                 for attempt in range(max_retries):
+                    logger.info(f"Checking server readiness via internal curl (attempt {attempt + 1}/{max_retries})...")
                     try:
-                        # Check if server is responding
-                        check_command = f"curl -s http://localhost:{config.PORT}/probe/"
-                        execute_command(ssh_client, check_command)
+                        execute_command(ssh_client, check_command, max_retries=1)
+                        logger.success("Server is responsive inside instance!")
                         server_ready = True
                         break
                     except Exception as e:
-                        logger.warning(
-                            f"Server not ready (attempt {attempt + 1}/{max_retries}): "
-                            f"{e}"
-                        )
+                        logger.warning(f"Server not ready yet (internal check): {e}")
                         if attempt < max_retries - 1:
-                            logger.info(
-                                f"Waiting {retry_delay} seconds before next attempt..."
-                            )
+                            try:
+                                 logger.info("Checking Docker container status...")
+                                 execute_command(ssh_client, f"sudo docker ps -f name={config.CONTAINER_NAME}", max_retries=1)
+                            except Exception as ps_e: logger.error(f"Container check failed: {ps_e}")
+                            logger.info(f"Waiting {retry_delay} seconds...")
                             time.sleep(retry_delay)
-
                 if not server_ready:
-                    raise RuntimeError("Server failed to start properly")
+                    try:
+                         logger.error("Server failed to become responsive. Getting container logs...")
+                         execute_command(ssh_client, f"sudo docker logs {config.CONTAINER_NAME}")
+                    except Exception as log_e: logger.error(f"Could not retrieve container logs: {log_e}")
+                    raise RuntimeError(f"Server at localhost:{config.PORT} did not become responsive.")
 
-                # Final status check
-                execute_command(ssh_client, f"docker ps | grep {config.CONTAINER_NAME}")
-
-                server_url = f"http://{instance_ip}:{config.PORT}"
-                logger.info(f"Deployment complete. Server running at: {server_url}")
-                logger.info(
-                    f"Auto-shutdown after {config.INACTIVITY_TIMEOUT_MINUTES} minutes "
-                    "of inactivity"
-                )
-
-                # Verify server is accessible from outside
-                try:
-                    import requests
-
-                    response = requests.get(f"{server_url}/probe/", timeout=10)
-                    if response.status_code == 200:
-                        logger.info("Server is accessible from outside!")
-                    else:
-                        logger.warning(
-                            f"Server responded with status code: {response.status_code}"
-                        )
-                except Exception as e:
-                    logger.warning(f"Could not verify external access: {e}")
-
-            except Exception as e:
-                logger.error(f"Error during deployment: {e}")
-                # Get container logs for debugging
-                try:
-                    execute_command(ssh_client, f"docker logs {config.CONTAINER_NAME}")
-                except Exception as exc:
-                    logger.warning(f"{exc=}")
-                    pass
-                raise
+                # Final check
+                execute_command(ssh_client, f"sudo docker ps --filter name={config.CONTAINER_NAME}")
 
             finally:
-                ssh_client.close()
+                if ssh_client: ssh_client.close(); logger.info("SSH connection for Docker setup closed.")
+
+            # 8. Deployment Successful
+            server_url = f"http://{instance_ip}:{config.PORT}"
+            logger.success(f"Deployment complete! Server running at: {server_url}")
+            logger.info(f"Auto-shutdown configured for inactivity (approx {config.INACTIVITY_TIMEOUT_MINUTES} minutes of low CPU).")
+
+            # Optional: Verify external access
+            try:
+                import requests
+                logger.info(f"Verifying external access to {server_url}/probe/ ...")
+                response = requests.get(f"{server_url}/probe/", timeout=20)
+                response.raise_for_status()
+                logger.success("Successfully verified external access to /probe/ endpoint.")
+            except Exception as e:
+                logger.warning(f"Could not verify external access to server: {e}")
+
+            # Return IP and ID on success
+            return instance_ip, instance_id
 
         except Exception as e:
-            logger.error(f"Deployment failed: {e}")
-            if CLEANUP_ON_FAILURE:
-                # Attempt cleanup on failure
-                try:
-                    Deploy.stop()
-                except Exception as cleanup_error:
-                    logger.error(f"Cleanup after failure also failed: {cleanup_error}")
-            raise
+            logger.error(f"Deployment failed: {e}", exc_info=True)
+            if CLEANUP_ON_FAILURE and instance_id:
+                logger.warning("Attempting cleanup due to deployment failure...")
+                try: Deploy.stop(project_name=config.PROJECT_NAME)
+                except Exception as cleanup_error: logger.error(f"Cleanup after failure also failed: {cleanup_error}")
+            # Return None on failure
+            return None, None
 
-        logger.info("Deployment completed successfully!")
+    @staticmethod
+    def stop(
+        project_name: str = config.PROJECT_NAME,
+        security_group_name: str = config.AWS_EC2_SECURITY_GROUP,
+    ) -> None:
+        """
+        Terminates EC2 instance(s) and deletes associated resources
+        (SG, Auto-Shutdown Lambda, CW Alarm, IAM Role).
+        Excludes Discovery API components cleanup.
+
+        Args:
+            project_name (str): The project name used to tag the instance.
+            security_group_name (str): The name of the security group to delete.
+        """
+        # 1. Initialize clients
+        ec2_resource = boto3.resource("ec2", region_name=config.AWS_REGION)
+        ec2_client = boto3.client("ec2", region_name=config.AWS_REGION)
+        lambda_client = boto3.client("lambda", region_name=config.AWS_REGION)
+        cloudwatch_client = boto3.client('cloudwatch', region_name=config.AWS_REGION)
+        iam_client = boto3.client("iam", region_name=config.AWS_REGION)
+
+        logger.info("Starting cleanup...")
+
+        # 2. Terminate EC2 instances
+        instances_terminated = []
+        try:
+            instances = ec2_resource.instances.filter(
+                Filters=[
+                    {"Name": "tag:Name", "Values": [project_name]},
+                    {
+                        "Name": "instance-state-name",
+                        "Values": [
+                            "pending", "running", "shutting-down",
+                            "stopped", "stopping",
+                        ],
+                    },
+                ]
+            )
+            instance_list = list(instances) # Materialize to get count and iterate safely
+            if not instance_list:
+                 logger.info(f"No instances found with tag Name={project_name} to terminate.")
+            else:
+                 logger.info(f"Found {len(instance_list)} instance(s) to terminate.")
+                 for instance in instance_list:
+                     logger.info(f"Terminating instance: ID - {instance.id}")
+                     instances_terminated.append(instance.id)
+                     try:
+                          instance.terminate()
+                     except ClientError as term_error:
+                          # Handle cases where instance might already be shutting down/terminated
+                          if term_error.response['Error']['Code'] == 'InvalidInstanceID.NotFound':
+                               logger.warning(f"Instance {instance.id} already gone.")
+                          else:
+                               logger.warning(f"Could not issue terminate for {instance.id}: {term_error}")
+
+                 # Wait for termination if any instances were targeted
+                 if instances_terminated:
+                     logger.info(f"Waiting for instance(s) {instances_terminated} to terminate...")
+                     # Wait for all instances submitted for termination
+                     try:
+                          waiter = ec2_client.get_waiter('instance_terminated')
+                          waiter.wait(
+                              InstanceIds=instances_terminated,
+                              WaiterConfig={'Delay': 15, 'MaxAttempts': 40} # Wait up to 10 mins
+                          )
+                          logger.info(f"Instance(s) {instances_terminated} confirmed terminated.")
+                     except Exception as wait_error:
+                          logger.warning(f"Error or timeout waiting for instance termination: {wait_error}")
+                          logger.warning("Proceeding with cleanup, some resources might fail if instances linger.")
+
+        except Exception as e:
+            logger.error(f"Error during instance discovery/termination: {e}")
+            # Continue cleanup attempt
+
+        # 3. Delete CloudWatch Alarms associated with the project
+        try:
+            # Using prefix is common, but adjust if you used tags or a different naming scheme
+            alarm_prefix = f"{config.PROJECT_NAME}-CPU-Low-Alarm-"
+            paginator = cloudwatch_client.get_paginator('describe_alarms')
+            alarms_to_delete = []
+            logger.info(f"Searching for CloudWatch alarms with prefix: {alarm_prefix}")
+
+            # Paginate through all alarms matching the prefix
+            for page in paginator.paginate(AlarmNamePrefix=alarm_prefix):
+                for alarm in page.get('MetricAlarms', []):
+                     # Could add more filtering here if needed (e.g., check tags)
+                     alarms_to_delete.append(alarm['AlarmName'])
+
+            alarms_to_delete = list(set(alarms_to_delete)) # Remove potential duplicates
+
+            if alarms_to_delete:
+                logger.info(f"Deleting CloudWatch alarms: {alarms_to_delete}")
+                # Batch delete in chunks of up to 100
+                for i in range(0, len(alarms_to_delete), 100):
+                    chunk = alarms_to_delete[i:i + 100]
+                    try:
+                        cloudwatch_client.delete_alarms(AlarmNames=chunk)
+                        logger.info(f"Deleted alarm chunk: {chunk}")
+                    except ClientError as delete_alarm_err:
+                         logger.error(f"Failed to delete alarm chunk {chunk}: {delete_alarm_err}")
+            else:
+                logger.info("No matching CloudWatch alarms found to delete.")
+        except Exception as e:
+            logger.error(f"Error searching/deleting CloudWatch alarms: {e}")
+
+       # 4. Delete Lambda function (Auto-Shutdown only)
+        lambda_function_name = LAMBDA_FUNCTION_NAME # Constant defined at top of file
+        try:
+            logger.info(f"Attempting to delete Lambda function: {lambda_function_name}")
+            lambda_client.delete_function(FunctionName=lambda_function_name)
+            logger.info(f"Deleted Lambda function: {lambda_function_name}")
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ResourceNotFoundException":
+                logger.info(f"Lambda function {lambda_function_name} does not exist.")
+            else:
+                # Log other errors but continue cleanup
+                logger.error(f"Error deleting Lambda function {lambda_function_name}: {e}")
+
+        # 5. Delete IAM Role (Auto-shutdown only)
+        role_name = IAM_ROLE_NAME # Constant for the role
+        try:
+            logger.info(f"Attempting to delete IAM role: {role_name}")
+            # Detach managed policies first
+            attached_policies = iam_client.list_attached_role_policies(RoleName=role_name).get("AttachedPolicies", [])
+            if attached_policies:
+                 logger.info(f"Detaching {len(attached_policies)} managed policies from role {role_name}...")
+                 for policy in attached_policies:
+                      try:
+                           iam_client.detach_role_policy(RoleName=role_name, PolicyArn=policy["PolicyArn"])
+                           logger.debug(f"Detached policy {policy['PolicyArn']}")
+                      except ClientError as detach_err:
+                           logger.warning(f"Could not detach policy {policy['PolicyArn']}: {detach_err}")
+
+            # Detach inline policies (if any)
+            inline_policies = iam_client.list_role_policies(RoleName=role_name).get("PolicyNames", [])
+            if inline_policies:
+                 logger.info(f"Deleting {len(inline_policies)} inline policies from role {role_name}...")
+                 for policy_name in inline_policies:
+                      try:
+                           iam_client.delete_role_policy(RoleName=role_name, PolicyName=policy_name)
+                           logger.debug(f"Deleted inline policy {policy_name}")
+                      except ClientError as inline_err:
+                           logger.warning(f"Could not delete inline policy {policy_name}: {inline_err}")
+
+            # Delete the role
+            iam_client.delete_role(RoleName=role_name)
+            logger.info(f"Deleted IAM role: {role_name}")
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "NoSuchEntity":
+                 logger.info(f"IAM role {role_name} does not exist.")
+            elif e.response["Error"]["Code"] == "DeleteConflict":
+                 logger.error(f"Cannot delete IAM role {role_name} due to dependencies (e.g., instance profile still attached?): {e}")
+            else:
+                # Log other errors but continue cleanup
+                logger.error(f"Error deleting IAM role {role_name}: {e}")
+
+
+        # 6. Delete Security Group
+        sg_delete_wait = 30 # Seconds
+        logger.info(f"Waiting {sg_delete_wait} seconds before attempting security group deletion...")
+        time.sleep(sg_delete_wait)
+        try:
+            logger.info(f"Attempting to delete security group: {security_group_name}")
+            ec2_client.delete_security_group(GroupName=security_group_name)
+            logger.info(f"Deleted security group: {security_group_name}")
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "InvalidGroup.NotFound":
+                logger.info(f"Security group {security_group_name} not found.")
+            elif e.response["Error"]["Code"] == "DependencyViolation":
+                 logger.error(f"Could not delete security group {security_group_name} due to existing dependencies (e.g., network interfaces). Manual cleanup might be required. Error: {e}")
+            else:
+                logger.error(f"Error deleting security group {security_group_name}: {e}")
+
+        logger.info("Cleanup process finished.")
 
     @staticmethod
     def status() -> None:
@@ -834,7 +1035,6 @@ class Deploy:
 
         # Check auto-shutdown infrastructure
         lambda_client = boto3.client("lambda", region_name=config.AWS_REGION)
-        events_client = boto3.client("events", region_name=config.AWS_REGION)
 
         try:
             lambda_response = lambda_client.get_function(
@@ -844,41 +1044,6 @@ class Deploy:
             logger.debug(f"{lambda_response=}")
         except ClientError:
             logger.info("Auto-shutdown Lambda: Not configured")
-
-        try:
-            rule_response = events_client.describe_rule(Name=CLOUDWATCH_RULE_NAME)
-            logger.info(
-                f"CloudWatch rule: {CLOUDWATCH_RULE_NAME} "
-                f"(State: {rule_response['State']})"
-            )
-            logger.info(
-                f"Auto-shutdown interval: {config.INACTIVITY_TIMEOUT_MINUTES} minutes"
-            )
-        except ClientError:
-            logger.info("CloudWatch rule: Not configured")
-
-        # Check discovery API
-        try:
-            apigw_client = boto3.client("apigateway", region_name=config.AWS_REGION)
-            apis = apigw_client.get_rest_apis()
-
-            api_found = False
-            for api in apis["items"]:
-                if api["name"] == API_GATEWAY_NAME:
-                    api_id = api["id"]
-                    api_endpoint = (
-                        f"https://{api_id}.execute-api"
-                        f".{config.AWS_REGION}.amazonaws.com/prod/discover"
-                    )
-                    logger.info(f"Discovery API: {api_endpoint}")
-                    api_found = True
-                    break
-
-            if not api_found:
-                logger.info("Discovery API: Not configured")
-
-        except ClientError as e:
-            logger.error(f"Error checking API Gateway: {e}")
 
     @staticmethod
     def ssh(non_interactive: bool = False) -> None:
@@ -970,165 +1135,6 @@ class Deploy:
             logger.info(f"Connecting with: {ssh_command}")
             os.system(ssh_command)
             return
-
-    @staticmethod
-    def stop(
-        project_name: str = config.PROJECT_NAME,
-        security_group_name: str = config.AWS_EC2_SECURITY_GROUP,
-    ) -> None:
-        """
-        Terminates EC2 instance(s) and deletes associated resources
-        (SG, Auto-Shutdown Lambda, CW Alarm, IAM Role).
-        Excludes Discovery API components cleanup.
-
-        Args:
-            project_name (str): The project name used to tag the instance.
-            security_group_name (str): The name of the security group to delete.
-        """
-        # 1. Initialize clients
-        ec2_resource = boto3.resource("ec2", region_name=config.AWS_REGION)
-        ec2_client = boto3.client("ec2", region_name=config.AWS_REGION)
-        lambda_client = boto3.client("lambda", region_name=config.AWS_REGION)
-        cloudwatch_client = boto3.client('cloudwatch', region_name=config.AWS_REGION)
-        iam_client = boto3.client("iam", region_name=config.AWS_REGION)
-
-        logger.info("Starting cleanup...")
-
-        # 2. Terminate EC2 instances
-        instances_terminated = []
-        try:
-            instances = ec2_resource.instances.filter(
-                Filters=[
-                    {"Name": "tag:Name", "Values": [project_name]},
-                    {
-                        "Name": "instance-state-name",
-                        "Values": [
-                            "pending", "running", "shutting-down",
-                            "stopped", "stopping",
-                        ],
-                    },
-                ]
-            )
-            instance_list = list(instances) # Materialize to get count and iterate safely
-            if not instance_list:
-                 logger.info(f"No instances found with tag Name={project_name} to terminate.")
-            else:
-                 logger.info(f"Found {len(instance_list)} instance(s) to terminate.")
-                 for instance in instance_list:
-                     logger.info(f"Terminating instance: ID - {instance.id}")
-                     instances_terminated.append(instance.id)
-                     try:
-                          instance.terminate()
-                     except ClientError as term_error:
-                          logger.warning(f"Could not issue terminate for {instance.id}: {term_error}")
-
-                 # Wait for termination if any instances were targeted
-                 if instances_terminated:
-                     logger.info(f"Waiting for instance(s) {instances_terminated} to terminate...")
-                     # Wait for all instances submitted for termination
-                     try:
-                          waiter = ec2_client.get_waiter('instance_terminated')
-                          waiter.wait(
-                              InstanceIds=instances_terminated,
-                              WaiterConfig={'Delay': 15, 'MaxAttempts': 40} # Wait up to 10 mins
-                          )
-                          logger.info(f"Instance(s) {instances_terminated} confirmed terminated.")
-                     except Exception as wait_error:
-                          logger.warning(f"Error or timeout waiting for instance termination: {wait_error}")
-                          logger.warning("Proceeding with cleanup, some resources might fail if instances linger.")
-
-        except Exception as e:
-            logger.error(f"Error during instance discovery/termination: {e}")
-            # Continue cleanup attempt
-
-        # 3. Delete CloudWatch Alarms associated with the project
-        try:
-            # Using prefix is common, but adjust if you used tags or a different naming scheme
-            alarm_prefix = f"{config.PROJECT_NAME}-CPU-Low-Alarm-"
-            paginator = cloudwatch_client.get_paginator('describe_alarms')
-            alarms_to_delete = []
-            logger.info(f"Searching for CloudWatch alarms with prefix: {alarm_prefix}")
-
-            for page in paginator.paginate(AlarmNamePrefix=alarm_prefix):
-                for alarm in page.get('MetricAlarms', []):
-                     # Could add more filtering here if needed (e.g., check tags)
-                     alarms_to_delete.append(alarm['AlarmName'])
-
-            alarms_to_delete = list(set(alarms_to_delete)) # Remove potential duplicates
-
-            if alarms_to_delete:
-                logger.info(f"Deleting CloudWatch alarms: {alarms_to_delete}")
-                # Batch delete in chunks of up to 100
-                for i in range(0, len(alarms_to_delete), 100):
-                    chunk = alarms_to_delete[i:i + 100]
-                    try:
-                        cloudwatch_client.delete_alarms(AlarmNames=chunk)
-                        logger.info(f"Deleted alarm chunk: {chunk}")
-                    except ClientError as delete_alarm_err:
-                         logger.error(f"Failed to delete alarm chunk {chunk}: {delete_alarm_err}")
-            else:
-                logger.info("No matching CloudWatch alarms found to delete.")
-        except Exception as e:
-            logger.error(f"Error searching/deleting CloudWatch alarms: {e}")
-
-       # 4. Delete Lambda function (Auto-Shutdown only)
-        lambda_function_name = LAMBDA_FUNCTION_NAME # Constant defined at top of file
-        try:
-            logger.info(f"Attempting to delete Lambda function: {lambda_function_name}")
-            lambda_client.delete_function(FunctionName=lambda_function_name)
-            logger.info(f"Deleted Lambda function: {lambda_function_name}")
-        except ClientError as e:
-            if e.response["Error"]["Code"] == "ResourceNotFoundException":
-                logger.info(f"Lambda function {lambda_function_name} does not exist.")
-            else:
-                # Log other errors but continue cleanup
-                logger.error(f"Error deleting Lambda function {lambda_function_name}: {e}")
-
-        # 5. Delete IAM Role (Auto-shutdown only)
-        role_name = f"{config.PROJECT_NAME}-lambda-role" # Role used by auto-shutdown lambda
-        try:
-            logger.info(f"Attempting to delete IAM role: {role_name}")
-            # Detach managed policies first
-            attached_policies = iam_client.list_attached_role_policies(RoleName=role_name).get("AttachedPolicies", [])
-            for policy in attached_policies:
-                logger.info(f"Detaching policy {policy['PolicyArn']} from role {role_name}")
-                iam_client.detach_role_policy(RoleName=role_name, PolicyArn=policy["PolicyArn"])
-
-            # Detach inline policies (if any - less common for this setup)
-            inline_policies = iam_client.list_role_policies(RoleName=role_name).get("PolicyNames", [])
-            for policy_name in inline_policies:
-                 logger.info(f"Deleting inline policy {policy_name} from role {role_name}")
-                 iam_client.delete_role_policy(RoleName=role_name, PolicyName=policy_name)
-
-            # Delete the role
-            iam_client.delete_role(RoleName=role_name)
-            logger.info(f"Deleted IAM role: {role_name}")
-        except ClientError as e:
-            if e.response["Error"]["Code"] == "NoSuchEntity":
-                 logger.info(f"IAM role {role_name} does not exist.")
-            else:
-                # Log other errors but continue cleanup
-                logger.error(f"Error deleting IAM role {role_name}: {e}")
-
-
-        # 6. Delete Security Group
-        # Add a delay before deleting SG to allow network interfaces to detach
-        sg_delete_wait = 30 # Seconds
-        logger.info(f"Waiting {sg_delete_wait} seconds before attempting security group deletion...")
-        time.sleep(sg_delete_wait)
-        try:
-            logger.info(f"Attempting to delete security group: {security_group_name}")
-            ec2_client.delete_security_group(GroupName=security_group_name)
-            logger.info(f"Deleted security group: {security_group_name}")
-        except ClientError as e:
-            if e.response["Error"]["Code"] == "InvalidGroup.NotFound":
-                logger.info(f"Security group {security_group_name} not found.")
-            elif e.response["Error"]["Code"] == "DependencyViolation":
-                 logger.error(f"Could not delete security group {security_group_name} due to existing dependencies (e.g., network interfaces). Manual cleanup might be required. Error: {e}")
-            else:
-                logger.error(f"Error deleting security group {security_group_name}: {e}")
-
-        logger.info("Cleanup process finished.")
 
     @staticmethod
     def stop_instance(instance_id: str) -> None:
@@ -1334,4 +1340,8 @@ def discover() -> dict:
 
 
 if __name__ == "__main__":
+    # Ensure boto3 clients use the region from config if set
+    # Note: Boto3 usually picks region from env vars or ~/.aws/config first
+    if config.AWS_REGION:
+         boto3.setup_default_session(region_name=config.AWS_REGION)
     fire.Fire(Deploy)
