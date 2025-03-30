@@ -1,14 +1,17 @@
+# omnimcp/omniparser/client.py
+
 """Client module for interacting with the OmniParser server."""
 
 import base64
-import time
 from typing import Optional, Dict, List
 
-import requests
 from loguru import logger
 from PIL import Image, ImageDraw
+import boto3  # Need boto3 for the initial check
+import requests
 
-from server import Deploy
+from .server import Deploy
+from ..config import config
 
 
 class OmniParserClient:
@@ -28,59 +31,111 @@ class OmniParserClient:
 
     def _ensure_server(self) -> None:
         """Ensure a server is available, deploying one if necessary."""
-        if not self.server_url:
-            # Try to find an existing server
-            deployer = Deploy()
-            deployer.status()  # This will log any running instances
+        if self.server_url:
+            logger.info(f"Using provided server URL: {self.server_url}")
+        else:
+            logger.info("No server_url provided, attempting discovery/deployment...")
+            # Try finding existing running instance first
+            instance_ip = None
+            instance_id = None
+            try:
+                ec2 = boto3.resource("ec2", region_name=config.AWS_REGION)
+                instances = ec2.instances.filter(
+                    Filters=[
+                        {
+                            "Name": "tag:Name",
+                            "Values": [config.PROJECT_NAME],
+                        },  # Use project name tag
+                        {"Name": "instance-state-name", "Values": ["running"]},
+                    ]
+                )
+                # Get the most recently launched running instance
+                running_instances = sorted(
+                    list(instances), key=lambda i: i.launch_time, reverse=True
+                )
+                instance = running_instances[0] if running_instances else None
 
-            # Check if any instances are running
-            import boto3
-
-            ec2 = boto3.resource("ec2")
-            instances = ec2.instances.filter(
-                Filters=[
-                    {"Name": "tag:Name", "Values": ["omniparser"]},
-                    {"Name": "instance-state-name", "Values": ["running"]},
-                ]
-            )
-
-            instance = next(iter(instances), None)
-            if instance and instance.public_ip_address:
-                self.server_url = f"http://{instance.public_ip_address}:8000"
-                logger.info(f"Found existing server at {self.server_url}")
-            elif self.auto_deploy:
-                logger.info("No server found, deploying new instance...")
-                deployer.start()
-                # Wait for deployment and get URL
-                max_retries = 30
-                retry_delay = 10
-                for i in range(max_retries):
-                    instances = ec2.instances.filter(
-                        Filters=[
-                            {"Name": "tag:Name", "Values": ["omniparser"]},
-                            {"Name": "instance-state-name", "Values": ["running"]},
-                        ]
+                if instance and instance.public_ip_address:
+                    instance_ip = instance.public_ip_address
+                    instance_id = instance.id  # Store ID too for logging maybe
+                    self.server_url = f"http://{instance_ip}:{config.PORT}"
+                    logger.success(
+                        f"Found existing running server instance {instance_id} at {self.server_url}"
                     )
-                    instance = next(iter(instances), None)
-                    if instance and instance.public_ip_address:
-                        self.server_url = f"http://{instance.public_ip_address}:8000"
-                        break
-                    time.sleep(retry_delay)
-                else:
-                    raise RuntimeError("Failed to deploy server")
-            else:
-                raise RuntimeError("No server URL provided and auto_deploy is disabled")
+                elif self.auto_deploy:
+                    logger.info(
+                        "No running server found, attempting auto-deployment via Deploy.start()..."
+                    )
+                    # Call start and get the result directly
+                    deployer = Deploy()
+                    # Deploy.start now returns IP and ID
+                    instance_ip, instance_id = deployer.start()
 
-        # Verify server is responsive
-        self._check_server()
+                    if instance_ip and instance_id:
+                        # Deployment succeeded, set the URL
+                        self.server_url = f"http://{instance_ip}:{config.PORT}"
+                        logger.success(
+                            f"Auto-deployment successful. Server URL: {self.server_url} (Instance ID: {instance_id})"
+                        )
+                    else:
+                        # deployer.start() failed and returned None
+                        raise RuntimeError(
+                            "Auto-deployment failed (Deploy.start did not return valid IP/ID). Check server logs."
+                        )
+                else:  # No running instance and auto_deploy is False
+                    raise RuntimeError(
+                        "No server URL provided, no running instance found, and auto_deploy is disabled."
+                    )
+
+            except Exception as e:
+                logger.error(
+                    f"Error during server discovery/deployment: {e}", exc_info=True
+                )
+                # Re-raise as a RuntimeError to be caught by the main script if needed
+                raise RuntimeError(f"Server discovery/deployment failed: {e}") from e
+
+        # Verify server is responsive (only if server_url is now set)
+        if self.server_url:
+            logger.info(f"Checking server responsiveness at {self.server_url}...")
+            try:
+                self._check_server()  # This probes the URL
+                logger.success(f"Server at {self.server_url} is responsive.")
+            except Exception as check_err:
+                logger.error(f"Server check failed for {self.server_url}: {check_err}")
+                # Raise error - if we have a URL it should be responsive after deployment/discovery
+                raise RuntimeError(
+                    f"Server at {self.server_url} failed responsiveness check."
+                ) from check_err
+        else:
+            # Safety check - should not be reachable if logic above is correct
+            raise RuntimeError("Critical error: Failed to obtain server URL.")
 
     def _check_server(self) -> None:
         """Check if the server is responsive."""
+        if not self.server_url:
+            raise RuntimeError(
+                "Cannot check server responsiveness, server_url is not set."
+            )
         try:
-            response = requests.get(f"{self.server_url}/probe/", timeout=10)
-            response.raise_for_status()
-        except Exception as e:
-            raise RuntimeError(f"Server not responsive: {e}")
+            # Increased timeout slightly
+            response = requests.get(f"{self.server_url}/probe/", timeout=15)
+            response.raise_for_status()  # Raises HTTPError for bad responses (4xx or 5xx)
+            # Check content if needed: assert response.json().get("message") == "..."
+        except requests.exceptions.Timeout:
+            logger.error(
+                f"Timeout connecting to server probe endpoint: {self.server_url}/probe/"
+            )
+            raise RuntimeError(f"Server probe timed out for {self.server_url}")
+        except requests.exceptions.ConnectionError:
+            logger.error(
+                f"Connection error reaching server probe endpoint: {self.server_url}/probe/"
+            )
+            raise RuntimeError(f"Server probe connection error for {self.server_url}")
+        except requests.exceptions.RequestException as e:
+            logger.error(
+                f"Error during server probe request for {self.server_url}: {e}"
+            )
+            raise RuntimeError(f"Server probe failed: {e}") from e
 
     def parse_image(self, image: Image.Image) -> Dict:
         """Parse an image using the OmniParser server.

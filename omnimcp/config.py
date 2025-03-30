@@ -1,3 +1,5 @@
+# omnimcp/config.py
+
 """Configuration management for OmniMCP."""
 
 import os
@@ -12,6 +14,9 @@ class OmniMCPConfig(BaseSettings):
 
     # Claude API configuration
     ANTHROPIC_API_KEY: Optional[str] = None
+
+    # Auto-shutdown OmniParser after 60min inactivity
+    INACTIVITY_TIMEOUT_MINUTES: int = 60
 
     # OmniParser configuration
     OMNIPARSER_URL: Optional[str] = None

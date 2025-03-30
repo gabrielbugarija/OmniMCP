@@ -587,7 +587,6 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pynput" },
     { name = "requests" },
-    { name = "ruff" },
     { name = "tenacity" },
 ]
 
@@ -596,6 +595,7 @@ test = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-mock" },
+    { name = "ruff" },
 ]
 
 [package.metadata]
@@ -618,7 +618,7 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.23.5" },
     { name = "pytest-mock", marker = "extra == 'test'", specifier = ">=3.10.0" },
     { name = "requests", specifier = ">=2.31.0" },
-    { name = "ruff", specifier = ">=0.11.2" },
+    { name = "ruff", marker = "extra == 'test'", specifier = ">=0.11.2" },
     { name = "tenacity", specifier = ">=9.0.0" },
 ]
 
