@@ -6,11 +6,8 @@ generated UI images instead of relying on real displays.
 """
 
 import os
-from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont
-import io
+from PIL import Image, ImageDraw
 from typing import List, Dict, Tuple, Any, Optional
-import numpy as np
 
 
 def generate_test_ui(

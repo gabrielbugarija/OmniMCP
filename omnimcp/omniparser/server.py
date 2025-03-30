@@ -22,7 +22,6 @@ from omnimcp.config import config
 
 # Constants for AWS resource names
 LAMBDA_FUNCTION_NAME = f"{config.PROJECT_NAME}-auto-shutdown"
-# CLOUDWATCH_RULE_NAME = f"{config.PROJECT_NAME}-inactivity-monitor" # No longer used for rate() rule
 IAM_ROLE_NAME = (
     f"{config.PROJECT_NAME}-lambda-role"  # Role for the auto-shutdown Lambda
 )
@@ -695,7 +694,7 @@ def create_auto_shutdown_infrastructure(instance_id: str) -> None:
         return
 
     # Inside the lambda_code f-string:
-    lambda_code = f"""
+    lambda_code = """
 import boto3
 import os
 import json
@@ -703,23 +702,23 @@ import json
 INSTANCE_ID = os.environ.get('INSTANCE_ID')
 # AWS_REGION = os.environ.get('AWS_REGION') # <-- Remove this line
 
-print(f"Lambda invoked. Checking instance: {{INSTANCE_ID}}") # Removed region here
+print(f"Lambda invoked. Checking instance: {INSTANCE_ID}") # Removed region here
 
 def lambda_handler(event, context):
     if not INSTANCE_ID: # <-- Modified check
         print("Error: INSTANCE_ID environment variable not set.")
-        return {{'statusCode': 500, 'body': json.dumps('Configuration error')}}
+        return {'statusCode': 500, 'body': json.dumps('Configuration error')}
 
     # boto3 automatically uses the Lambda execution region if not specified
     ec2 = boto3.client('ec2') # <-- Removed region_name=AWS_REGION
-    print(f"Inactivity Alarm triggered for instance: {{INSTANCE_ID}}. Checking state...")
+    print(f"Inactivity Alarm triggered for instance: {INSTANCE_ID}. Checking state...")
     # ... rest of the lambda code remains the same ...
     try:
         response = ec2.describe_instances(InstanceIds=[INSTANCE_ID])
         # ... (existing logic) ...
     except Exception as e:
-        print(f"Error interacting with EC2 for instance {{INSTANCE_ID}}: {{str(e)}}")
-        return {{'statusCode': 500, 'body': json.dumps(f'Error: {{str(e)}}')}}
+        print(f"Error interacting with EC2 for instance {INSTANCE_ID}: {str(e)}")
+        return {'statusCode': 500, 'body': json.dumps(f'Error: {str(e)}')}
 """
 
     # --- Create or Update Lambda Function ---
@@ -743,7 +742,7 @@ def lambda_handler(event, context):
                 FunctionName=lambda_function_name
             )
             lambda_arn = func_config["FunctionArn"]  # Get ARN if exists
-            logger.info(f"Found existing Lambda. Updating code and configuration...")
+            logger.info("Found existing Lambda. Updating code and configuration...")
             lambda_client.update_function_code(
                 FunctionName=lambda_function_name, ZipFile=zip_content
             )
@@ -792,7 +791,7 @@ def lambda_handler(event, context):
         # (Keep this cleanup from previous fix)
         try:
             events_client = boto3.client("events", region_name=config.AWS_REGION)
-            rule_name = CLOUDWATCH_RULE_NAME  # Old constant
+            rule_name = f"{config.PROJECT_NAME}-inactivity-monitor"
             logger.info(
                 f"Attempting to cleanup old Event rule/targets for: {rule_name}"
             )
@@ -1423,7 +1422,7 @@ class Deploy:
                     if result.returncode == 0:
                         logger.info("Instance is ready for SSH connections")
                         return
-                except Exception as e:
+                except Exception:
                     pass
 
                 time.sleep(10)  # Wait 10 seconds between attempts

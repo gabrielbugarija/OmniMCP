@@ -5,15 +5,11 @@ This tests the critical paths of OmniMCP using the synthetic UI images
 instead of real screenshots to ensure deterministic results.
 """
 
-import os
 import asyncio
-from pathlib import Path
 from unittest.mock import patch, MagicMock
-from PIL import Image
 
 # Import from the installed package
 from omnimcp.omnimcp import OmniMCP, VisualState
-from omnimcp.types import Bounds, UIElement
 
 # Local import from test directory
 from tests.test_synthetic_ui import generate_test_ui, generate_action_test_pair

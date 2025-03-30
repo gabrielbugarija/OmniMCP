@@ -3,7 +3,6 @@
 """Client module for interacting with the OmniParser server."""
 
 import base64
-import time
 from typing import Optional, Dict, List
 
 from loguru import logger

@@ -4,7 +4,7 @@ import pytest
 import time
 import boto3
 import requests
-from typing import Optional, List
+from typing import List
 
 from omnimcp.omniparser.server import Deploy
 from omnimcp.omniparser.client import parse_image

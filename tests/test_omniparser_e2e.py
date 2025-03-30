@@ -8,7 +8,6 @@ from PIL import Image
 
 from loguru import logger
 from omnimcp.omniparser.client import OmniParserClient, OmniParserProvider
-from omnimcp.config import config
 
 
 @pytest.fixture(scope="module")
