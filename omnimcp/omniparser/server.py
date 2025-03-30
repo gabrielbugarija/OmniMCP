@@ -439,13 +439,19 @@ def deploy_ec2_instance(
         return None, None
 
 
+# TODO: Wait for Unattended Upgrades: Add an explicit wait or a loop checking
+# for the lock file (/var/lib/dpkg/lock-frontend) before running apt-get
+# install. E.g., while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1;
+# do echo 'Waiting for apt lock...'; sleep 10; done. This is more robust.
+
+
 def configure_ec2_instance(
     instance_id: str,
     instance_ip: str,
     max_ssh_retries: int = 20,
     ssh_retry_delay: int = 20,
-    max_cmd_retries: int = 5,
-    cmd_retry_delay: int = 15,
+    max_cmd_retries: int = 20,
+    cmd_retry_delay: int = 20,
 ) -> bool:
     """Configure the specified EC2 instance (install Docker, etc.)."""
 
@@ -542,7 +548,7 @@ def configure_ec2_instance(
 def execute_command(
     ssh_client: paramiko.SSHClient,
     command: str,
-    max_retries: int = 3,
+    max_retries: int = 20,
     retry_delay: int = 10,
     timeout: int = config.COMMAND_TIMEOUT,  # Use timeout from config
 ) -> Tuple[int, str, str]:  # Return status, stdout, stderr

@@ -1,3 +1,5 @@
+# omnimcp/omnimcp.py
+
 """
 OmniMCP: Model Context Protocol for UI Automation through visual understanding.
 
