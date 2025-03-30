@@ -20,20 +20,33 @@ if __name__ == "__main__":
     # Optional: Check if config loaded AWS keys (for user feedback)
     # Note: boto3 might still find credentials via ~/.aws/credentials even if not in .env/env vars
     if config.AWS_ACCESS_KEY_ID and config.AWS_SECRET_ACCESS_KEY and config.AWS_REGION:
-         logger.info(f"AWS config loaded via pydantic-settings (Region: {config.AWS_REGION}).")
+        logger.info(
+            f"AWS config loaded via pydantic-settings (Region: {config.AWS_REGION})."
+        )
     else:
-         logger.warning("AWS credentials/region not found via config (env vars or .env).")
-         logger.warning("Ensure credentials are configured where boto3 can find them (e.g., ~/.aws/credentials, env vars).")
-
+        logger.warning(
+            "AWS credentials/region not found via config (env vars or .env)."
+        )
+        logger.warning(
+            "Ensure credentials are configured where boto3 can find them (e.g., ~/.aws/credentials, env vars)."
+        )
 
     # 1. Initialize Client (Triggers auto-deploy/discovery)
-    logger.info("Initializing OmniParserClient (this may take several minutes if deploying)...")
+    logger.info(
+        "Initializing OmniParserClient (this may take several minutes if deploying)..."
+    )
     try:
-        parser_client = OmniParserClient(auto_deploy=True) # auto_deploy=True is default
-        logger.success(f"OmniParserClient ready. Connected to server: {parser_client.server_url}")
+        parser_client = OmniParserClient(
+            auto_deploy=True
+        )  # auto_deploy=True is default
+        logger.success(
+            f"OmniParserClient ready. Connected to server: {parser_client.server_url}"
+        )
     except Exception as e:
         logger.error(f"Failed to initialize OmniParserClient: {e}", exc_info=True)
-        logger.error("Please check AWS credentials configuration and network connectivity.")
+        logger.error(
+            "Please check AWS credentials configuration and network connectivity."
+        )
         sys.exit(1)
 
     # 2. Take Screenshot
@@ -58,7 +71,9 @@ if __name__ == "__main__":
         results = parser_client.parse_image(screenshot)
         logger.success("Received response from OmniParser.")
     except Exception as e:
-        logger.error(f"Unexpected error during client.parse_image call: {e}", exc_info=True)
+        logger.error(
+            f"Unexpected error during client.parse_image call: {e}", exc_info=True
+        )
         sys.exit(1)
 
     # 4. Print Results
@@ -73,7 +88,9 @@ if __name__ == "__main__":
             logger.error(f"Could not format result as JSON: {json_e}")
             print(results)
     else:
-        logger.warning(f"Received unexpected result format from OmniParser client: {type(results)}")
+        logger.warning(
+            f"Received unexpected result format from OmniParser client: {type(results)}"
+        )
         print(results)
 
     logger.info("--- Test Finished ---")
