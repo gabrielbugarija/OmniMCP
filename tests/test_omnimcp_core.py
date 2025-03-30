@@ -5,18 +5,15 @@ OmniMCP: Model Context Protocol for UI Automation through visual understanding.
 Refactored to use OmniParserClient.
 """
 
-import io
 import time
-from typing import List, Optional, Literal, Dict  # Added Dict
+from typing import List, Optional, Literal, Dict, Tuple
 
 import numpy as np
 from mcp.server.fastmcp import FastMCP
 from loguru import logger
+from PIL import Image
 
-# --- Updated Import ---
-# Import the client class, not the non-existent provider
 from omnimcp.omniparser.client import OmniParserClient
-# --- End Updated Import ---
 
 from omnimcp.utils import (
     take_screenshot,

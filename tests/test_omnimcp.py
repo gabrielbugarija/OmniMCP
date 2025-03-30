@@ -9,9 +9,7 @@ import requests
 from typing import List
 
 from omnimcp.omniparser.server import Deploy
-from omnimcp.omniparser.client import OmniParserClient
 from omnimcp.config import config
-import synthetic_ui_helpers
 
 
 def get_running_parser_instances() -> List[dict]:

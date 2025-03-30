@@ -2,7 +2,6 @@
 
 """End-to-end tests for OmniParser deployment and function."""
 
-import os
 import time
 import pytest
 from pathlib import Path
@@ -53,7 +52,7 @@ def test_client_initialization_and_availability(test_image):  # Combined test
         pytest.fail(f"OmniParserClient initialization failed: {e}")
 
     # Perform a basic parse test now that client is initialized
-    logger.info(f"Testing image parsing via initialized client...")
+    logger.info("Testing image parsing via initialized client...")
     start_time = time.time()
     result = client.parse_image(test_image)
     parse_time = time.time() - start_time
@@ -61,9 +60,9 @@ def test_client_initialization_and_availability(test_image):  # Combined test
 
     assert result is not None, "Parse result should not be None"
     assert "error" not in result, f"Parsing returned an error: {result.get('error')}"
-    assert (
-        "parsed_content_list" in result
-    ), "Parsing result missing 'parsed_content_list'"
+    assert "parsed_content_list" in result, (
+        "Parsing result missing 'parsed_content_list'"
+    )
     elements = result.get("parsed_content_list", [])
     logger.info(f"Found {len(elements)} elements.")
     assert len(elements) >= 3, "Expected at least a few elements in the synthetic image"
