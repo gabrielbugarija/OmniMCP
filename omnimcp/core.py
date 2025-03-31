@@ -1,5 +1,5 @@
 # omnimcp/core.py
-from typing import List, Tuple, Literal
+from typing import List, Tuple, Literal, Optional
 from pydantic import BaseModel, Field, field_validator, ValidationInfo
 
 
@@ -13,34 +13,62 @@ from .completions import call_llm_api, format_chat_messages  # Import TypeVar T
 class LLMActionPlan(BaseModel):
     """Defines the structured output expected from the LLM for action planning."""
 
-    reasoning: str = Field(
-        ...,
-        description="Step-by-step thinking process to connect the user goal to the chosen UI element and action. Explain the choice.",
+    reasoning: str = Field(..., description="Step-by-step thinking process...")
+    # Add 'press_key' to the allowed actions
+    action: Literal["click", "type", "scroll", "press_key"] = Field(
+        ..., description="..."
     )
-    action: Literal["click", "type", "scroll"] = Field(
-        ..., description="The type of interaction to perform on the element."
-    )
-    element_id: int = Field(
-        ...,
-        description="The unique ID of the target UI element from the provided list.",
-    )
-    text_to_type: str | None = Field(
+    # Make element_id optional, default None
+    element_id: Optional[int] = Field(
         None,
-        description="The text to type into the element, ONLY if the action is 'type'.",
+        description="The ID of the target UI element IF the action is 'click' or 'type'. Must be null for 'press_key' and 'scroll'.",
+    )
+    text_to_type: Optional[str] = Field(
+        None, description="Text to type IF action is 'type'. Must be null otherwise."
+    )
+    # Add field for key press action
+    key_info: Optional[str] = Field(
+        None,
+        description="Key or shortcut to press IF action is 'press_key' (e.g., 'Enter', 'Cmd+Space', 'Win'). Must be null otherwise.",
     )
     is_goal_complete: bool = Field(
-        ...,
-        description="Set to true if the user's overall goal is fully achieved given the current UI state, otherwise false.",
-    )  # New field
+        ..., description="Set to true if the user's overall goal is fully achieved..."
+    )
+
+    # Updated Validators
+    @field_validator("element_id")
+    @classmethod
+    def check_element_id(cls, v: Optional[int], info: ValidationInfo) -> Optional[int]:
+        action = info.data.get("action")
+        if action in ["click", "type"] and v is None:
+            # Type might sometimes not need an element_id if typing globally? Revisit if needed.
+            # For now, require element_id for click/type.
+            raise ValueError(f"element_id is required for action '{action}'")
+        if action in ["scroll", "press_key"] and v is not None:
+            raise ValueError(f"element_id must be null for action '{action}'")
+        return v
 
     @field_validator("text_to_type")
-    def check_text_to_type(cls, v: str | None, info: ValidationInfo) -> str | None:
-        if info.data.get("action") == "type" and v is None:
-            logger.warning("Action is 'type' but 'text_to_type' is missing.")
-        elif info.data.get("action") != "type" and v is not None:
-            logger.warning(
-                f"Action is '{info.data.get('action')}' but 'text_to_type' was provided."
-            )
+    @classmethod
+    def check_text_to_type(
+        cls, v: Optional[str], info: ValidationInfo
+    ) -> Optional[str]:
+        action = info.data.get("action")
+        if action == "type" and v is None:
+            # Allow empty string for type, but not None if action is type
+            raise ValueError("text_to_type is required for action 'type'")
+        if action != "type" and v is not None:
+            raise ValueError("text_to_type must be null for actions other than 'type'")
+        return v
+
+    @field_validator("key_info")
+    @classmethod
+    def check_key_info(cls, v: Optional[str], info: ValidationInfo) -> Optional[str]:
+        action = info.data.get("action")
+        if action == "press_key" and v is None:
+            raise ValueError("key_info is required for action 'press_key'")
+        if action != "press_key" and v is not None:
+            raise ValueError("key_info must be null for actions other than 'press_key'")
         return v
 
 
@@ -72,18 +100,31 @@ Here is a list of UI elements currently visible on the screen.
 
 **Instructions:**
 1.  **Analyze:** Review the user goal, previous actions, and the current UI elements.
-2.  **Check Completion:** Based ONLY on the current UI elements, determine if the original user goal has already been fully achieved. Set `is_goal_complete` accordingly (true/false).
-3.  **Reason (if goal not complete):** If the goal is not complete, think step-by-step (in the `reasoning` field) about the single best *next* action to progress towards the goal. Consider the element types, content, and previous actions.
-4.  **Select Action & Element (if goal not complete):** Choose the most appropriate action ("click", "type", "scroll") and the `ID` of the target UI element for that single next step. If the goal is already complete, you can choose a dummy action like 'click' on a harmless element (e.g., static text if available, or ID 0) or default to 'click' ID 0, but focus on setting `is_goal_complete` correctly.
-5.  **Specify Text (if typing):** If the action is "type", provide the exact text in `text_to_type`. Otherwise, leave it null.
+2.  **Check Completion:** ... set `is_goal_complete` accordingly (true/false).
+3.  **Reason (if goal not complete):**
+    * If the goal requires a specific application (like a web browser...) that is NOT readily visible... include a plan to launch it first.
+    * Think step-by-step...
+4.  **Select Action & Element (if goal not complete):**
+    * **Prioritize visible elements:** If a relevant element... is visible, choose 'click' or 'type' and its `element_id`.
+    * **If needed element/app is not visible:** Plan the sequence to launch it using the OS search. This usually involves:
+        * Action: "press_key" with `key_info` specifying the OS search shortcut (e.g., "Cmd+Space", "Win").
+        * *Then (in subsequent steps)*: Action: "type" with `text_to_type` specifying the application name (e.g., "Google Chrome").
+        * *Then (in subsequent steps)*: Action: "press_key" with `key_info` specifying the 'Enter' key.
+    * Choose ONLY the *single next step* in the sequence for the current plan.
+    * Other Actions: Use "scroll" if needed to reveal elements (provide `element_id: null`, `key_info: null`, `text_to_type: null`).
+    * If the goal is already complete, choose 'click', `element_id: 0`, set `is_goal_complete: true`.
+5.  **Specify Text or Key (if applicable):**
+    * If action is "type", provide the exact text in `text_to_type` (null otherwise).
+    * If action is "press_key", provide the key/shortcut description in `key_info` (e.g., "Enter", "Cmd+Space") (null otherwise).
 6.  **Format Output:** Respond ONLY with a valid JSON object matching the structure below.
 
 ```json
 {
   "reasoning": "Your step-by-step thinking process here...",
-  "action": "click | type | scroll",
-  "element_id": <ID of the target element>,
+  "action": "click | type | scroll | press_key",
+  "element_id": <ID of target element, or null>,
   "text_to_type": "<text to enter if action is type, otherwise null>",
+  "key_info": "<key or shortcut if action is press_key, otherwise null>",
   "is_goal_complete": true | false
 }
 ```

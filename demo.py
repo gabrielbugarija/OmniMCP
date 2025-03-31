@@ -170,9 +170,7 @@ async def run_real_planner_demo(
         action_history.append(action_desc)
 
         # --- 7. Execute REAL Action ---
-        logger.info(
-            f"Executing action: {llm_plan.action} on element {target_element.id}"
-        )
+        logger.info(f"Executing action: {llm_plan.action}...")  # Simplified log
         action_success = False
         try:
             if visual_state.screen_dimensions is None:
@@ -180,38 +178,74 @@ async def run_real_planner_demo(
                 break
 
             screen_w, screen_h = visual_state.screen_dimensions
-            # Calculate center absolute coordinates for clicks
-            abs_x = int(
-                (target_element.bounds[0] + target_element.bounds[2] / 2) * screen_w
-            )
-            abs_y = int(
-                (target_element.bounds[1] + target_element.bounds[3] / 2) * screen_h
-            )
 
             if llm_plan.action == "click":
-                mouse_controller.move(abs_x, abs_y)
-                time.sleep(0.1)  # Small pause
-                mouse_controller.click()
-                action_success = True
-                logger.success(f"Executed click at ({abs_x}, {abs_y})")
-            elif llm_plan.action == "type":
-                if llm_plan.text_to_type is not None:
-                    # Click target first to focus (optional but often needed)
+                if target_element:
+                    abs_x = int(
+                        (target_element.bounds[0] + target_element.bounds[2] / 2)
+                        * screen_w
+                    )
+                    abs_y = int(
+                        (target_element.bounds[1] + target_element.bounds[3] / 2)
+                        * screen_h
+                    )
                     logger.info(
-                        f"Clicking element {target_element.id} before typing..."
+                        f"Clicking element {target_element.id} at ({abs_x}, {abs_y})"
                     )
                     mouse_controller.move(abs_x, abs_y)
                     time.sleep(0.1)
                     mouse_controller.click()
-                    time.sleep(0.2)  # Wait after click
+                    action_success = True
+                else:
+                    logger.error("Click planned but target element object not found.")
+
+            elif llm_plan.action == "type":
+                if llm_plan.text_to_type is not None:
+                    if target_element:  # Click target first if specified
+                        abs_x = int(
+                            (target_element.bounds[0] + target_element.bounds[2] / 2)
+                            * screen_w
+                        )
+                        abs_y = int(
+                            (target_element.bounds[1] + target_element.bounds[3] / 2)
+                            * screen_h
+                        )
+                        logger.info(
+                            f"Clicking element {target_element.id} at ({abs_x}, {abs_y}) before typing..."
+                        )
+                        mouse_controller.move(abs_x, abs_y)
+                        time.sleep(0.1)
+                        mouse_controller.click()
+                        time.sleep(0.2)
                     # Type the text
                     logger.info(f"Typing text: '{llm_plan.text_to_type[:20]}...'")
                     keyboard_controller.type(llm_plan.text_to_type)
                     action_success = True
-                    logger.success("Executed type action.")
                 else:
-                    logger.warning("LLM planned 'type' action but provided no text.")
-                    action_success = False  # Treat as failure if no text
+                    logger.error("Type planned but text_to_type is null.")
+
+            elif llm_plan.action == "press_key":
+                if llm_plan.key_info is not None:
+                    key_info = llm_plan.key_info
+                    logger.info(f"Pressing key(s): {key_info}")
+                    # TODO: Implement more robust parsing for combinations like "Cmd+Space"
+                    # This basic version handles simple key names recognized by pynput
+                    # (e.g., 'enter', 'cmd', 'ctrl', 'shift', 'space', 'a', 'b', ...)
+                    # You might need to map strings like "Cmd+Space" to controller actions
+                    # like press(Key.cmd), press(Key.space), release(Key.space), release(Key.cmd)
+                    if "+" in key_info:  # Very basic combo handling attempt
+                        parts = key_info.split("+")
+                        # Requires mapping 'Cmd'/'Win' etc to pynput Key enum
+                        logger.warning("Key combinations not fully implemented yet.")
+                        # Placeholder: press first part for now
+                        keyboard_controller.press(parts[0].strip().lower())
+                    else:
+                        keyboard_controller.press(key_info.lower())  # Assume simple key
+
+                    action_success = True
+                else:
+                    logger.error("Press_key planned but key_info is null.")
+
             elif llm_plan.action == "scroll":
                 # Basic scroll implementation (adjust direction/amount as needed)
                 scroll_amount = 5  # Example: Scroll down 5 units
