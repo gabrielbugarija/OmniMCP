@@ -1018,7 +1018,7 @@ class Deploy:
                         f"--no-cache -t {config.PROJECT_NAME} ."
                     ),
                     (
-                        f"sudo docker run -d -p {config.PORT}:{config.PORT} --gpus all --name "
+                        f"sudo docker run -d --restart always -p {config.PORT}:{config.PORT} --gpus all --name "
                         f"{config.CONTAINER_NAME} {config.PROJECT_NAME}"
                     ),
                 ]
