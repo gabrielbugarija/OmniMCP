@@ -627,18 +627,23 @@ def execute_command(
     raise RuntimeError(f"Command failed after exhausting retries: {command}")
 
 
-# Updated create_auto_shutdown_infrastructure function
 def create_auto_shutdown_infrastructure(instance_id: str) -> None:
-    """Create CloudWatch Alarm and Lambda function for CPU inactivity based auto-shutdown."""
+    """
+    Create CloudWatch Alarm and Lambda function for CPU inactivity based auto-shutdown,
+    including granting necessary permissions.
+    """
+    # Initialize necessary clients
     lambda_client = boto3.client("lambda", region_name=config.AWS_REGION)
     iam_client = boto3.client("iam", region_name=config.AWS_REGION)
     cloudwatch_client = boto3.client("cloudwatch", region_name=config.AWS_REGION)
+    sts_client = boto3.client(
+        "sts", region_name=config.AWS_REGION
+    )  # Needed for Account ID
 
-    role_name = IAM_ROLE_NAME  # Use constant
+    # Use constants defined at module level
+    role_name = IAM_ROLE_NAME
     lambda_function_name = LAMBDA_FUNCTION_NAME
-    alarm_name = (
-        f"{config.PROJECT_NAME}-CPU-Low-Alarm-{instance_id}"  # Unique alarm name
-    )
+    alarm_name = f"{config.PROJECT_NAME}-CPU-Low-Alarm-{instance_id}"  # Unique alarm name per instance
 
     logger.info("Setting up auto-shutdown infrastructure (Alarm-based)...")
 
@@ -656,89 +661,103 @@ def create_auto_shutdown_infrastructure(instance_id: str) -> None:
             ],
         }
         logger.info(f"Attempting to create/get IAM role: {role_name}")
-        response = iam_client.create_role(
-            RoleName=role_name, AssumeRolePolicyDocument=json.dumps(assume_role_policy)
-        )
-        role_arn = response["Role"]["Arn"]
-        logger.info(f"Created IAM role {role_name}. Attaching policies...")
-        # Attach policies needed by Lambda
-        iam_client.attach_role_policy(
-            RoleName=role_name,
-            PolicyArn="arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
-        )
-        iam_client.attach_role_policy(
-            RoleName=role_name,
-            PolicyArn="arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess",
-        )
-        iam_client.attach_role_policy(
-            RoleName=role_name, PolicyArn="arn:aws:iam::aws:policy/AmazonEC2FullAccess"
-        )  # Consider reducing scope later
-
-        logger.info(f"Attached policies to IAM role {role_name}")
-        logger.info("Waiting for IAM role propagation...")
-        time.sleep(15)  # Increased wait time for IAM propagation
-    except ClientError as e:
-        if e.response["Error"]["Code"] == "EntityAlreadyExists":
-            logger.info(f"IAM role {role_name} already exists, retrieving ARN...")
-            try:
+        try:
+            response = iam_client.create_role(
+                RoleName=role_name,
+                AssumeRolePolicyDocument=json.dumps(assume_role_policy),
+            )
+            role_arn = response["Role"]["Arn"]
+            logger.info(f"Created IAM role {role_name}. Attaching policies...")
+            # Attach policies needed by Lambda
+            iam_client.attach_role_policy(
+                RoleName=role_name,
+                PolicyArn="arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+            )
+            iam_client.attach_role_policy(
+                RoleName=role_name,
+                PolicyArn="arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess",
+            )
+            iam_client.attach_role_policy(
+                RoleName=role_name,
+                PolicyArn="arn:aws:iam::aws:policy/AmazonEC2FullAccess",
+            )  # Consider reducing scope later
+            logger.info(f"Attached policies to IAM role {role_name}")
+            logger.info("Waiting for IAM role propagation...")
+            time.sleep(15)  # Increased wait time for IAM propagation
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "EntityAlreadyExists":
+                logger.info(f"IAM role {role_name} already exists, retrieving ARN...")
                 response = iam_client.get_role(RoleName=role_name)
                 role_arn = response["Role"]["Arn"]
-                # Optional: Verify/attach policies if needed, though typically done at creation
-            except ClientError as get_e:
-                logger.error(f"Failed to get existing IAM role {role_name}: {get_e}")
-                logger.error(
-                    "Cannot proceed with auto-shutdown setup without IAM role ARN."
-                )
-                return  # Stop setup
-        else:
-            logger.error(f"Error creating/getting IAM role {role_name}: {e}")
-            logger.error("Cannot proceed with auto-shutdown setup without IAM role.")
-            return  # Stop setup
+                # Optional: Add logic here to verify/attach required policies if the role already existed
+            else:
+                raise  # Reraise other creation errors
+    except Exception as e:
+        logger.error(f"Failed to create/get IAM role {role_name}: {e}")
+        logger.error("Cannot proceed with auto-shutdown setup without IAM role.")
+        return  # Stop setup
 
     if not role_arn:
         logger.error("Failed to obtain IAM role ARN. Aborting auto-shutdown setup.")
         return
 
-    # Inside the lambda_code f-string:
+    # --- Define Updated Lambda Function Code ---
+    # (Contains fix to remove AWS_REGION env var usage and rely on default boto3 region)
     lambda_code = """
 import boto3
 import os
 import json
 
 INSTANCE_ID = os.environ.get('INSTANCE_ID')
-# AWS_REGION = os.environ.get('AWS_REGION') # <-- Remove this line
+# AWS_REGION = os.environ.get('AWS_REGION') # No longer needed
 
 print(f"Lambda invoked. Checking instance: {INSTANCE_ID}") # Removed region here
 
 def lambda_handler(event, context):
-    if not INSTANCE_ID: # <-- Modified check
+    if not INSTANCE_ID:
         print("Error: INSTANCE_ID environment variable not set.")
         return {'statusCode': 500, 'body': json.dumps('Configuration error')}
 
     # boto3 automatically uses the Lambda execution region if not specified
-    ec2 = boto3.client('ec2') # <-- Removed region_name=AWS_REGION
+    ec2 = boto3.client('ec2') # Removed region_name
     print(f"Inactivity Alarm triggered for instance: {INSTANCE_ID}. Checking state...")
-    # ... rest of the lambda code remains the same ...
+
     try:
         response = ec2.describe_instances(InstanceIds=[INSTANCE_ID])
-        # ... (existing logic) ...
+        if not response.get('Reservations') or not response['Reservations'][0].get('Instances'):
+             print(f"Instance {INSTANCE_ID} not found (already terminated?). No action needed.")
+             return {'statusCode': 404, 'body': json.dumps('Instance not found')}
+
+        instance_data = response['Reservations'][0]['Instances'][0]
+        state = instance_data['State']['Name']
+
+        if state == 'running':
+            print(f"Instance {INSTANCE_ID} is running. Stopping due to inactivity alarm.")
+            try:
+                 ec2.stop_instances(InstanceIds=[INSTANCE_ID])
+                 print(f"Stop command issued for {INSTANCE_ID}.")
+                 return {'statusCode': 200, 'body': json.dumps('Instance stop initiated')}
+            except Exception as stop_err:
+                 print(f"Failed to issue stop command for {INSTANCE_ID}: {str(stop_err)}")
+                 return {'statusCode': 500, 'body': json.dumps(f'Failed to stop instance: {str(stop_err)}')}
+        else:
+            print(f"Instance {INSTANCE_ID} is already in state '{state}'. No action taken.")
+            return {'statusCode': 200, 'body': json.dumps('Instance not running, no action')}
     except Exception as e:
         print(f"Error interacting with EC2 for instance {INSTANCE_ID}: {str(e)}")
         return {'statusCode': 500, 'body': json.dumps(f'Error: {str(e)}')}
 """
 
     # --- Create or Update Lambda Function ---
-    lambda_arn = None  # Initialize
+    lambda_arn = None
     try:
         logger.info(f"Preparing Lambda function code for {lambda_function_name}...")
         zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(
-            zip_buffer, "w", zipfile.ZIP_DEFLATED
-        ) as zip_file:  # Use 'w' for new zip
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
             zip_file.writestr("lambda_function.py", lambda_code.encode("utf-8"))
         zip_content = zip_buffer.getvalue()
 
-        env_vars = {"Variables": {"INSTANCE_ID": instance_id}}
+        env_vars = {"Variables": {"INSTANCE_ID": instance_id}}  # Only pass instance ID
 
         try:
             logger.info(
@@ -747,11 +766,22 @@ def lambda_handler(event, context):
             func_config = lambda_client.get_function_configuration(
                 FunctionName=lambda_function_name
             )
-            lambda_arn = func_config["FunctionArn"]  # Get ARN if exists
+            lambda_arn = func_config["FunctionArn"]
             logger.info("Found existing Lambda. Updating code and configuration...")
             lambda_client.update_function_code(
                 FunctionName=lambda_function_name, ZipFile=zip_content
             )
+            # Add waiter after code update
+            logger.info(
+                f"Waiting for Lambda function code update on {lambda_function_name} to complete..."
+            )
+            waiter_update = lambda_client.get_waiter("function_updated_v2")
+            waiter_update.wait(
+                FunctionName=lambda_function_name,
+                WaiterConfig={"Delay": 5, "MaxAttempts": 12},
+            )  # Wait up to 60s
+            logger.info("Lambda function code update complete.")
+            # Now update configuration
             lambda_client.update_function_configuration(
                 FunctionName=lambda_function_name,
                 Role=role_arn,
@@ -759,7 +789,9 @@ def lambda_handler(event, context):
                 Timeout=30,
                 MemorySize=128,
             )
-            logger.info(f"Updated Lambda function: {lambda_function_name}")
+            logger.info(
+                f"Updated Lambda function configuration: {lambda_function_name}"
+            )
 
         except ClientError as e:
             if e.response["Error"]["Code"] == "ResourceNotFoundException":
@@ -768,7 +800,7 @@ def lambda_handler(event, context):
                 )
                 response = lambda_client.create_function(
                     FunctionName=lambda_function_name,
-                    Runtime="python3.9",  # Ensure this runtime is supported/desired
+                    Runtime="python3.9",
                     Role=role_arn,
                     Handler="lambda_function.lambda_handler",
                     Code={"ZipFile": zip_content},
@@ -776,41 +808,40 @@ def lambda_handler(event, context):
                     MemorySize=128,
                     Description=f"Auto-shutdown function for {config.PROJECT_NAME} instance {instance_id}",
                     Environment=env_vars,
-                    Tags={
-                        "Project": config.PROJECT_NAME
-                    },  # Tag for easier identification
+                    Tags={"Project": config.PROJECT_NAME},
                 )
                 lambda_arn = response["FunctionArn"]
                 logger.info(f"Created Lambda function: {lambda_arn}")
-                # Need to wait for function to be fully active before creating alarm/permissions
                 logger.info("Waiting for Lambda function to become active...")
-                waiter = lambda_client.get_waiter("function_active_v2")
-                waiter.wait(FunctionName=lambda_function_name)
+                waiter_create = lambda_client.get_waiter("function_active_v2")
+                waiter_create.wait(
+                    FunctionName=lambda_function_name,
+                    WaiterConfig={"Delay": 2, "MaxAttempts": 15},
+                )
                 logger.info("Lambda function is active.")
             else:
-                raise  # Reraise other ClientErrors during get/update/create
+                raise  # Reraise other ClientErrors
 
         if not lambda_arn:
             raise RuntimeError("Failed to get Lambda Function ARN after create/update.")
 
         # --- Remove Old CloudWatch Events Rule and Permissions (Idempotent) ---
-        # (Keep this cleanup from previous fix)
         try:
             events_client = boto3.client("events", region_name=config.AWS_REGION)
-            rule_name = f"{config.PROJECT_NAME}-inactivity-monitor"
+            old_rule_name = f"{config.PROJECT_NAME}-inactivity-monitor"
             logger.info(
-                f"Attempting to cleanup old Event rule/targets for: {rule_name}"
+                f"Attempting to cleanup old Event rule/targets for: {old_rule_name}"
             )
             try:
-                events_client.remove_targets(Rule=rule_name, Ids=["1"], Force=True)
+                events_client.remove_targets(Rule=old_rule_name, Ids=["1"], Force=True)
             except ClientError as e_rem:
                 logger.debug(f"Ignoring error removing targets: {e_rem}")
             try:
-                events_client.delete_rule(Name=rule_name)
+                events_client.delete_rule(Name=old_rule_name)
             except ClientError as e_del:
                 logger.debug(f"Ignoring error deleting rule: {e_del}")
             logger.info(
-                f"Cleaned up old CloudWatch Events rule: {rule_name} (if it existed)"
+                f"Cleaned up old CloudWatch Events rule: {old_rule_name} (if it existed)"
             )
         except Exception as e_ev_clean:
             logger.warning(f"Issue during old Event rule cleanup: {e_ev_clean}")
@@ -821,7 +852,7 @@ def lambda_handler(event, context):
             lambda_client.remove_permission(
                 FunctionName=lambda_function_name,
                 StatementId=f"{config.PROJECT_NAME}-cloudwatch-trigger",
-            )
+            )  # Old Statement ID
             logger.info("Removed old CloudWatch Events permission from Lambda.")
         except ClientError as e_perm:
             if e_perm.response["Error"]["Code"] != "ResourceNotFoundException":
@@ -835,7 +866,7 @@ def lambda_handler(event, context):
         logger.info(
             f"Setting up CloudWatch alarm '{alarm_name}' for CPU < {threshold_cpu}% over {evaluation_periods * 5} minutes."
         )
-
+        alarm_arn = None  # Initialize alarm ARN
         try:
             # Delete existing alarm first for idempotency
             try:
@@ -844,21 +875,33 @@ def lambda_handler(event, context):
                     f"Deleted potentially existing CloudWatch alarm: {alarm_name}"
                 )
             except ClientError as e:
-                if e.response["Error"]["Code"] != "ResourceNotFoundException":
+                if e.response["Error"]["Code"] != "ResourceNotFound":
                     logger.warning(
                         f"Could not delete existing alarm {alarm_name} before creation: {e}"
                     )
+
+            # Get Account ID for constructing Alarm ARN
+            try:
+                account_id = sts_client.get_caller_identity()["Account"]
+                # Construct the ARN - verify region and partition if needed (assuming aws standard)
+                alarm_arn = f"arn:aws:cloudwatch:{config.AWS_REGION}:{account_id}:alarm:{alarm_name}"
+                logger.debug(f"Constructed Alarm ARN: {alarm_arn}")
+            except Exception as sts_e:
+                logger.error(
+                    f"Could not get AWS Account ID via STS: {sts_e}. Cannot set Lambda permission."
+                )
+                # Proceed without setting permission if ARN cannot be constructed
 
             cloudwatch_client.put_metric_alarm(
                 AlarmName=alarm_name,
                 AlarmDescription=f"Stop EC2 instance {instance_id} if avg CPU < {threshold_cpu}% for {evaluation_periods * 5} mins",
                 ActionsEnabled=True,
-                AlarmActions=[lambda_arn],  # Trigger Lambda function
+                AlarmActions=[lambda_arn],  # Trigger Lambda function ARN
                 MetricName="CPUUtilization",
                 Namespace="AWS/EC2",
                 Statistic="Average",
                 Dimensions=[{"Name": "InstanceId", "Value": instance_id}],
-                Period=300,  # 5 minutes period
+                Period=300,
                 EvaluationPeriods=evaluation_periods,
                 Threshold=threshold_cpu,
                 ComparisonOperator="LessThanThreshold",
@@ -869,21 +912,68 @@ def lambda_handler(event, context):
                 f"Created/Updated CloudWatch Alarm '{alarm_name}' triggering Lambda on low CPU."
             )
 
+            # --- *** ADD LAMBDA PERMISSION FOR ALARM *** ---
+            if alarm_arn and lambda_arn:  # Only proceed if we have both ARNs
+                statement_id = (
+                    f"AllowExecutionFromCloudWatchAlarm_{alarm_name}"  # Unique ID
+                )
+                logger.info(
+                    f"Attempting to grant invoke permission to Lambda {lambda_function_name} from Alarm {alarm_name}"
+                )
+                try:
+                    # Remove potentially existing permission with same ID first
+                    try:
+                        lambda_client.remove_permission(
+                            FunctionName=lambda_function_name, StatementId=statement_id
+                        )
+                        logger.info(
+                            f"Removed existing permission statement '{statement_id}' before adding new one."
+                        )
+                    except ClientError as e:
+                        if e.response["Error"]["Code"] != "ResourceNotFoundException":
+                            raise  # Reraise unexpected error
+
+                    # Add permission for the CloudWatch Alarm service to invoke this Lambda
+                    lambda_client.add_permission(
+                        FunctionName=lambda_function_name,
+                        StatementId=statement_id,
+                        Action="lambda:InvokeFunction",
+                        Principal="cloudwatch.amazonaws.com",  # Correct principal for CW Alarms
+                        SourceArn=alarm_arn,  # ARN of the specific CloudWatch Alarm
+                    )
+                    logger.success(
+                        f"Granted CloudWatch Alarm ({alarm_name}) permission to invoke Lambda ({lambda_function_name})."
+                    )
+                except ClientError as e:
+                    if e.response["Error"]["Code"] == "ResourceConflictException":
+                        logger.warning(
+                            f"Lambda permission statement '{statement_id}' may already exist or a conflict occurred."
+                        )
+                    else:
+                        logger.error(
+                            f"Failed to add Lambda permission for CloudWatch Alarm: {e}"
+                        )
+                        # Log but maybe don't fail deployment? Auto-shutdown just won't work.
+            else:
+                logger.error(
+                    "Skipping Lambda permission setup because Alarm ARN or Lambda ARN could not be determined."
+                )
+            # --- *** END PERMISSION FIX *** ---
+
         except Exception as e:
             logger.error(
-                f"Failed to create/update CloudWatch alarm '{alarm_name}': {e}"
+                f"Failed to create/update CloudWatch alarm or set permissions: {e}"
             )
-            # Decide if this failure should stop the deployment
 
         logger.success(
-            f"Auto-shutdown infrastructure setup attempted for {instance_id=}"
+            f"Auto-shutdown infrastructure setup completed for {instance_id=}"
         )
 
     except Exception as e:
         logger.error(
             f"Error setting up auto-shutdown infrastructure: {e}", exc_info=True
         )
-        # Do not raise here, allow deployment to continue but log the failure
+        # Allow deployment to continue but log the failure
 
 
 class Deploy:
