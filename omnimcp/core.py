@@ -2,6 +2,8 @@
 from typing import List, Tuple, Literal
 from pydantic import BaseModel, Field, field_validator, ValidationInfo
 
+import json
+
 from .types import UIElement
 from .utils import render_prompt, logger
 from .completions import call_llm_api  # Import TypeVar T
@@ -113,12 +115,17 @@ def plan_action_for_ui(
 
     system_prompt = "You are an AI assistant. Respond ONLY with valid JSON that conforms to the provided structure. Do not include any explanatory text before or after the JSON block."
     messages = [{"role": "user", "content": prompt}]
+    logger.debug(
+        f"Sending prompt to LLM:\nMessages: {json.dumps(messages, indent=2)}\n---"
+    )  # Log full input
 
     try:
         llm_plan = call_llm_api(messages, LLMActionPlan, system_prompt=system_prompt)
     except (ValueError, Exception) as e:
         logger.error(f"Failed to get valid action plan from LLM: {e}")
         raise
+
+    logger.debug(f"Received LLM response:\n{llm_plan.model_dump_json(indent=2)}\n---")
 
     # Find the target element even if goal is complete, might be needed for logging/dummy actions
     target_element = next((el for el in elements if el.id == llm_plan.element_id), None)

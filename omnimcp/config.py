@@ -37,7 +37,7 @@ class OmniMCPConfig(BaseSettings):
     COMMAND_TIMEOUT: int = 600  # 10 minutes
 
     # Debug settings
-    DEBUG: bool = False
+    # DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
 
     class Config:
