@@ -2,11 +2,10 @@
 from typing import List, Tuple, Literal
 from pydantic import BaseModel, Field, field_validator, ValidationInfo
 
-import json
 
 from .types import UIElement
 from .utils import render_prompt, logger
-from .completions import call_llm_api  # Import TypeVar T
+from .completions import call_llm_api, format_chat_messages  # Import TypeVar T
 
 # --- Pydantic Schema for LLM Output ---
 
@@ -96,7 +95,7 @@ Here is a list of UI elements currently visible on the screen.
 def plan_action_for_ui(
     elements: List[UIElement],
     user_goal: str,
-    action_history: List[str] | None = None,  # Add action history parameter
+    action_history: List[str] | None = None,
 ) -> Tuple[LLMActionPlan, UIElement | None]:
     """
     Uses an LLM to plan the next UI action based on elements, goal, and history.
@@ -115,9 +114,7 @@ def plan_action_for_ui(
 
     system_prompt = "You are an AI assistant. Respond ONLY with valid JSON that conforms to the provided structure. Do not include any explanatory text before or after the JSON block."
     messages = [{"role": "user", "content": prompt}]
-    logger.debug(
-        f"Sending prompt to LLM:\nMessages: {json.dumps(messages, indent=2)}\n---"
-    )  # Log full input
+    logger.debug(f"Sending prompt to LLM:\n{format_chat_messages(messages)}\n---")
 
     try:
         llm_plan = call_llm_api(messages, LLMActionPlan, system_prompt=system_prompt)
