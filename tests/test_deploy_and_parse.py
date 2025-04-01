@@ -8,12 +8,10 @@ parsing, and mapping to UIElements using VisualState.
 import sys
 import asyncio  # Needed for async VisualState.update()
 
-# Import config first to trigger .env loading
-from omnimcp.utils import logger  # Assuming logger is configured
-
-# Import the classes needed
+from omnimcp.utils import logger
 from omnimcp.omniparser.client import OmniParserClient
-from omnimcp.omnimcp import VisualState  # Import VisualState
+from omnimcp.omnimcp import VisualState
+
 
 if __name__ == "__main__":
     logger.info("--- Starting OmniParser Integration Test ---")

@@ -6,7 +6,7 @@ import os
 from typing import Optional
 from pathlib import Path
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class OmniMCPConfig(BaseSettings):
@@ -37,17 +37,14 @@ class OmniMCPConfig(BaseSettings):
     COMMAND_TIMEOUT: int = 600  # 10 minutes
 
     # Debug settings
-    DEBUG: bool = False
+    # DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
 
-    class Config:
-        """Pydantic settings configuration."""
-
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-
-        # Allow extra fields in the settings
-        extra = "ignore"
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     # Properties for OmniParser deployment
     @property

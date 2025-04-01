@@ -32,7 +32,7 @@ RETRYABLE_ERRORS = (
 )
 
 MAX_RETRIES = 3
-DEFAULT_MODEL = "claude-3-haiku-20240307"  # Or use Opus/Sonnet if needed
+DEFAULT_MODEL = "claude-3-7-sonnet-20250219"
 
 
 @retry(
@@ -137,3 +137,21 @@ def call_llm_api(
             exc_info=True,
         )
         raise
+
+
+def format_chat_messages(messages: List[Dict[str, str]]) -> str:
+    """Format chat messages in a readable way that preserves formatting."""
+    result = []
+
+    for msg in messages:
+        role = msg.get("role")
+        content = msg.get("content")
+
+        # Add a separator line
+        result.append("=" * 80)
+        result.append(f"ROLE: {role}")
+        result.append("-" * 80)
+        result.append(content)
+
+    result.append("=" * 80)
+    return "\n".join(result)

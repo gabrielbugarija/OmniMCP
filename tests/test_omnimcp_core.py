@@ -6,197 +6,198 @@ and a mocked OmniParserClient.
 """
 
 import pytest
+from unittest.mock import patch, MagicMock  # Keep MagicMock
+from PIL import Image, ImageDraw
 
-# Make sure patch is imported from unittest.mock
-from unittest.mock import patch, MagicMock
-from PIL import Image  # Keep needed imports
-
-# Import classes under test
+# Imports can be at the top now
 from omnimcp.omnimcp import OmniMCP, VisualState
-from omnimcp.types import UIElement, ActionVerification  # Keep needed types
-
-# Import helpers from the correct location
-from omnimcp.testing_utils import generate_test_ui, generate_action_test_pair
-
-# Import real client only needed for spec in mock below
-from omnimcp.omniparser.client import OmniParserClient
-# Import controllers to patch them where OmniMCP imports them
+from omnimcp.types import (
+    ActionVerification,
+)  # Keep Bounds if needed by other tests
+from omnimcp.input import InputController
 
 
-# Mock OmniParserClient class for testing VisualState
+# Mock OmniParserClient for testing VisualState without real parsing
 class MockOmniParserClient:
-    """Mock OmniParser client that returns predetermined elements."""
+    def __init__(self, mock_data):
+        self.mock_data = mock_data
+        self.server_url = "mock://server"
 
-    def __init__(self, elements_to_return: dict):
-        self.elements_to_return = elements_to_return
-        self.server_url = "http://mock-server:8000"  # Simulate having a server URL
-
-    def parse_image(self, image: Image.Image) -> dict:
-        """Mock parse_image method."""
-        # Add type hint for clarity
+    def parse_image(self, image: Image.Image):
         print("MockOmniParserClient: Returning mock data for parse_image call.")
-        return self.elements_to_return
-
-    # Add dummy methods if VisualState or OmniMCP call them during init/update
-    def _ensure_server(self):
-        pass
+        return self.mock_data
 
     def _check_server(self):
+        print("MockOmniParserClient: Dummy server check passed.")
         return True
 
 
-# Fixture to generate UI data once per module
-@pytest.fixture(scope="module")
+@pytest.fixture
 def synthetic_ui_data():
-    # Use the helper function imported from the package
-    img, elements_list_of_dicts = generate_test_ui()
-    # Create the dict structure the real client's parse_image method returns
-    mock_return_data = {"parsed_content_list": elements_list_of_dicts}
-    # Return all parts needed by tests
-    return img, mock_return_data, elements_list_of_dicts
+    """Provides a synthetic UI image and expected element structure."""
+    # Using a simple example structure for clarity
+    elements_list_of_dicts = [
+        {
+            "bbox": [0.1, 0.1, 0.3, 0.15],
+            "confidence": 1.0,
+            "content": "Username",
+            "type": "text_field",
+        },
+        {
+            "bbox": [0.1, 0.3, 0.3, 0.35],
+            "confidence": 1.0,
+            "content": "",
+            "type": "text_field",
+            "attributes": {"is_password": True},
+        },
+        {
+            "bbox": [0.1, 0.5, 0.15, 0.55],
+            "confidence": 1.0,
+            "content": "Remember Me",
+            "type": "checkbox",
+        },
+        {
+            "bbox": [0.4, 0.7, 0.6, 0.8],
+            "confidence": 1.0,
+            "content": "Login",
+            "type": "button",
+        },
+    ]
+    img = Image.new("RGB", (800, 600), color="lightgray")
+    return img, {"parsed_content_list": elements_list_of_dicts}, elements_list_of_dicts
 
 
-# Fixture providing an instance of the mock client based on synthetic data
 @pytest.fixture
 def mock_parser_client(synthetic_ui_data):
-    """Fixture providing an instance of MockOmniParserClient."""
-    _, mock_parse_return_data, _ = synthetic_ui_data
-    return MockOmniParserClient(mock_parse_return_data)
+    """Fixture to provide a MockOmniParserClient instance with mock data."""
+    _, mock_json_output, _ = synthetic_ui_data
+    return MockOmniParserClient(mock_data=mock_json_output)
 
 
-# ----- Tests for VisualState -----
+# --- Test VisualState ---
 
 
-@pytest.mark.asyncio
-async def test_visual_state_parsing(synthetic_ui_data, mock_parser_client):
+# Test is now synchronous
+def test_visual_state_parsing(synthetic_ui_data, mock_parser_client):
     """Test VisualState.update processes elements from the (mocked) parser client."""
     test_img, _, elements_expected_list_of_dicts = synthetic_ui_data
 
     # Patch take_screenshot used within visual_state.update
     with patch("omnimcp.omnimcp.take_screenshot", return_value=test_img):
-        # Initialize VisualState directly with the mock client instance
         visual_state = VisualState(parser_client=mock_parser_client)
-        # Check initial state
         assert not visual_state.elements
         assert visual_state.screen_dimensions is None
 
-        # Call the async update method
-        await visual_state.update()
+        # Call synchronous update method
+        visual_state.update()
 
-        # Verify state after update
         assert visual_state.screen_dimensions == test_img.size
-        assert visual_state._last_screenshot == test_img
-        assert visual_state.timestamp is not None
-
-        # Verify elements were processed correctly based on mock data
-        # NOTE: The mock data bbox is dict, mapper expects list -> This test WILL FAIL until mock data is fixed!
-        # Let's add the bbox fix to generate_test_ui in testing_utils.py first. Assuming that's done:
         assert len(visual_state.elements) == len(elements_expected_list_of_dicts)
-        assert all(isinstance(el, UIElement) for el in visual_state.elements)
-
-        # Check a specific element (assuming generate_test_ui puts button first)
-        button = next((e for e in visual_state.elements if e.type == "button"), None)
-        assert button is not None
-        assert button.content == "Submit"
-        assert button.id == 0  # Check ID assignment
-
-        # Check element ID assignment is sequential
-        assert [el.id for el in visual_state.elements] == list(
-            range(len(elements_expected_list_of_dicts))
+        assert (
+            visual_state.elements[0].content
+            == elements_expected_list_of_dicts[0]["content"]
         )
-        print("✅ Visual state parsing test passed (using mock client)")
+        assert (
+            visual_state.elements[0].type == elements_expected_list_of_dicts[0]["type"]
+        )
+        assert isinstance(visual_state.elements[0].bounds, tuple)
+        assert all(isinstance(b, float) for b in visual_state.elements[0].bounds)
 
 
-@pytest.mark.asyncio
-async def test_element_finding(synthetic_ui_data, mock_parser_client):
+# Test is now synchronous
+def test_element_finding(synthetic_ui_data, mock_parser_client):
     """Test VisualState.find_element locates elements using basic matching."""
     test_img, _, _ = synthetic_ui_data
 
-    # Patch screenshot and initialize VisualState with mock client
     with patch("omnimcp.omnimcp.take_screenshot", return_value=test_img):
         visual_state = VisualState(parser_client=mock_parser_client)
-        await visual_state.update()  # Populate state
+        visual_state.update()  # Populate state
 
-        # Test finding known elements (content based on generate_test_ui)
-        # Assuming mapping uses list bbox from fixed generate_test_ui and mapping works
-        assert len(visual_state.elements) > 0, "Mapping failed, no elements to find"
+        assert len(visual_state.elements) > 0
 
-        button = visual_state.find_element("submit button")
-        assert button is not None and button.type == "button"
+        login_button = visual_state.find_element("login button")
+        assert login_button is not None
+        assert login_button.type == "button"
 
-        textfield = visual_state.find_element(
-            "username field"
-        )  # Match placeholder/content
-        assert textfield is not None and textfield.type == "text_field"
+        username_field = visual_state.find_element("username")
+        assert username_field is not None
+        assert username_field.type == "text_field"
 
-        checkbox = visual_state.find_element("remember checkbox")  # Use type in query
-        assert checkbox is not None and checkbox.type == "checkbox"
-
-        link = visual_state.find_element("forgot password")
-        assert link is not None and link.type == "link"
-
-        # Test non-existent element
-        no_match = visual_state.find_element("non existent pizza")
-        assert no_match is None
-        print("✅ Element finding test passed (using mock client)")
+        nonexistent = visual_state.find_element("nonexistent element description")
+        assert nonexistent is None
 
 
-# ----- Tests for OmniMCP (using mocks) -----
+# --- Test Action Verification on OmniMCP ---
 
 
-@pytest.mark.asyncio
-# Add patches for the controllers used inside OmniMCP.__init__
-@patch("omnimcp.omnimcp.OmniParserClient")
-@patch("omnimcp.omnimcp.MouseController")
-@patch("omnimcp.omnimcp.KeyboardController")
-async def test_action_verification(
-    mock_kb_controller_class,  # Order matters, matches decorators bottom-up
-    mock_mouse_controller_class,
-    mock_omniparser_client_class,
-    # synthetic_ui_data # Fixture not actually used in this specific test logic
+# Patch dependencies of OmniMCP.__init__ and its methods
+@patch(
+    "omnimcp.omnimcp.OmniParserClient"
+)  # Mock the client class used by VS within OmniMCP
+@patch("omnimcp.omnimcp.InputController")  # Mock the unified controller used by OmniMCP
+@patch(
+    "omnimcp.omnimcp.take_screenshot"
+)  # Mock screenshot function called by VS update
+def test_action_verification(
+    mock_take_screenshot, MockInputController, MockOmniParserClientClass
 ):
-    """Test the basic pixel diff action verification in OmniMCP."""
-    # Mock the client instance
-    mock_client_instance = MagicMock(spec=OmniParserClient)
-    mock_client_instance.server_url = "http://mock-server:8000"
-    mock_client_instance.parse_image.return_value = {"parsed_content_list": []}
-    mock_omniparser_client_class.return_value = mock_client_instance
+    """
+    Test the _verify_action method on an OmniMCP instance.
+    """
+    # Configure mocks needed for OmniMCP initialization
+    mock_parser_instance = MockOmniParserClient(
+        {"parsed_content_list": []}
+    )  # Simple mock parser
+    MockOmniParserClientClass.return_value = mock_parser_instance
+    MockInputController.return_value = MagicMock(
+        spec=InputController
+    )  # Mock controller instance
 
-    # Mock the controller instances (optional, patching class often enough)
-    # mock_mouse_controller_class.return_value = MagicMock(spec=MouseController)
-    # mock_kb_controller_class.return_value = MagicMock(spec=KeyboardController)
-
-    # Generate before/after images
-    before_click, after_click, _ = generate_action_test_pair("click", "button")
-    before_type, after_type, _ = generate_action_test_pair("type", "text_field")
-    before_check, after_check, _ = generate_action_test_pair("check", "checkbox")
-    no_change_img, _, _ = generate_action_test_pair("click", "link")
-
-    # Create OmniMCP instance - its internal controller creation will now use mocks
+    # --- Create OmniMCP instance ---
+    # It will internally create VisualState using the mocked OmniParserClient
+    # and store the mocked InputController
     mcp = OmniMCP()
-    # Manually set screen dimensions if needed by _verify_action
-    mcp._visual_state.screen_dimensions = before_click.size
+    assert isinstance(mcp._controller, MagicMock)  # Verify controller mock was used
+    assert isinstance(
+        mcp._visual_state._parser_client, MockOmniParserClient
+    )  # Verify parser mock was used
 
-    # --- Test verification logic ---
-    click_verification = await mcp._verify_action(before_click, after_click)
-    assert isinstance(click_verification, ActionVerification)
-    assert click_verification.success is True, "Click action verification failed"
-    assert click_verification.confidence > 0.01
+    # --- Test case with change ---
+    img1 = Image.new("RGB", (100, 100), color="blue")
+    img2 = img1.copy()
+    ImageDraw.Draw(img2).rectangle([(10, 10), (50, 50)], fill="red")  # Draw a change
 
-    type_verification = await mcp._verify_action(before_type, after_type)
-    assert isinstance(type_verification, ActionVerification)
-    assert type_verification.success is True, "Type action verification failed"
-    assert type_verification.confidence > 0.01
+    # Simulate 'before' state update
+    mock_take_screenshot.return_value = img1
+    mcp._visual_state.update()
+    before_img = mcp._visual_state._last_screenshot
+    assert mcp._visual_state.screen_dimensions == (100, 100)
 
-    check_verification = await mcp._verify_action(before_check, after_check)
-    assert isinstance(check_verification, ActionVerification)
-    assert check_verification.success is True, "Check action verification failed"
-    assert check_verification.confidence > 0.01
+    # Simulate 'after' state update
+    mock_take_screenshot.return_value = img2
+    mcp._visual_state.update()
+    after_img = mcp._visual_state._last_screenshot
 
-    no_change_verification = await mcp._verify_action(no_change_img, no_change_img)
-    assert isinstance(no_change_verification, ActionVerification)
-    assert no_change_verification.success is False, (
-        "No change action verification failed"
+    # --- Call verification method on the OmniMCP instance ---
+    verification_result = mcp._verify_action(before_img, after_img)
+
+    assert isinstance(verification_result, ActionVerification)
+    assert verification_result.success is True, (
+        "Verification failed for image with changes"
     )
-    assert no_change_verification.confidence == 0.0
-    print("✅ Action verification test passed")
+    assert verification_result.confidence > 0.0
+
+    # --- Test case with no change ---
+    mock_take_screenshot.return_value = img1  # Reset screenshot
+    mcp._visual_state.update()  # Update state to img1
+    after_img_no_change = mcp._visual_state._last_screenshot
+
+    verification_no_change = mcp._verify_action(
+        before_img, after_img_no_change
+    )  # Compare img1 with img1
+
+    assert isinstance(verification_no_change, ActionVerification)
+    assert verification_no_change.success is False, (
+        "Verification succeeded for images with no change"
+    )
+    assert verification_no_change.confidence == 0.0

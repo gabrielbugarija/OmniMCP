@@ -257,6 +257,14 @@ def simulate_action(
         A tuple containing the new (PIL Image, List[UIElement]) after simulation.
         Returns the original state if action cannot be simulated.
     """
+    if plan.is_goal_complete:
+        logger.info("Goal is marked complete, no simulation needed for this step.")
+        # Return the *current* state without modification
+        # Use deepcopy only if downstream might modify elements accidentally
+        return image, copy.deepcopy(
+            elements
+        )  # Or just 'return image, elements' if mutation isn't a risk
+
     logger.debug(f"Simulating action: {plan.action} on element {plan.element_id}")
     new_image = image.copy()
     # IMPORTANT: Deep copy elements to avoid modifying previous steps' state
