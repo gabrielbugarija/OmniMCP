@@ -32,7 +32,7 @@ RETRYABLE_ERRORS = (
 )
 
 MAX_RETRIES = 3
-DEFAULT_MODEL = "claude-3-haiku-20240307"  # Or use Opus/Sonnet if needed
+DEFAULT_MODEL = "claude-3-7-sonnet-20250219"
 
 
 @retry(

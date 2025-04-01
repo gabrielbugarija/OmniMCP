@@ -1,346 +1,425 @@
 # demo.py
-
 """
-Multi-step demo using VisualState (real screenshot/parser/mapper)
-and Core LLM Planner, but still using Simulation for state transitions.
+OmniMCP Demo: Real Perception -> LLM Planner -> Real Action Execution.
+Saves detailed debug images for each step in timestamped directories.
 """
 
-from typing import List
-import argparse
+import platform
 import os
 import time
-import asyncio
-import sys  # For sys.exit
+import sys
+import datetime  # Import datetime
+from typing import List, Optional
 
-# Import necessary components
-from omnimcp.omniparser.client import (
-    OmniParserClient,
-)  # Needed to init VisualState indirectly
-from omnimcp.omnimcp import VisualState  # Handles screenshot, parse, map
-from omnimcp.core import plan_action_for_ui  # The LLM planner
-from omnimcp.synthetic_ui import draw_highlight
+from PIL import Image
+import fire
+
+# Import necessary components from the project
+from omnimcp.omniparser.client import OmniParserClient
+from omnimcp.omnimcp import VisualState
+from omnimcp.core import plan_action_for_ui, LLMActionPlan
+from omnimcp.input import InputController
 from omnimcp.utils import (
     logger,
-    MouseController,
-    KeyboardController,
-)  # Added controllers and coord helper
+    denormalize_coordinates,
+    take_screenshot,
+    draw_bounding_boxes,  # Import the new drawing function
+    get_scaling_factor,
+    draw_action_highlight,
+)
 from omnimcp.config import config
+from omnimcp.types import UIElement
+
 
 # --- Configuration ---
-OUTPUT_DIR = "demo_output_real_planner"
-SAVE_IMAGES = True
-MAX_STEPS = 6
+# OUTPUT_DIR is now dynamically created per run
+# SAVE_IMAGES = True # Always save images in this version
+MAX_STEPS = 10
 
 
-async def run_real_planner_demo(
-    user_goal: str = "Open a browser and check the weather",
+def run_real_planner_demo(
+    user_goal: str = "Open calculator and compute 5 * 9",
 ):
-    """Runs the demo integrating real perception->planning->action."""
-    logger.info("--- Starting OmniMCP Demo: Real Perception -> Planner -> ACTION ---")
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    """
+    Runs the main OmniMCP demo loop: Perception -> Planning -> Action.
+    Saves detailed debug images to images/{timestamp}/ folder.
 
-    # 1. Initialize Client, State Manager, and Controllers
+    Args:
+        user_goal: The natural language goal for the agent to achieve.
+
+    Returns:
+        True if the goal was achieved or max steps were reached without critical error,
+        False otherwise.
+    """
+    run_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_output_dir = os.path.join("images", run_timestamp)
+    os.makedirs(run_output_dir, exist_ok=True)
+    logger.info("--- Starting OmniMCP Demo ---")
+    logger.info(f"Saving outputs to: {run_output_dir}")
+
+    scaling_factor = get_scaling_factor()
+    logger.info(f"Using display scaling factor: {scaling_factor}")
+
+    # 1. Initialize Client, State Manager, and Controller
     if not config.ANTHROPIC_API_KEY:
         logger.error("ANTHROPIC_API_KEY not found in config. Cannot run planner.")
-        return False
-    logger.info("Initializing OmniParserClient, VisualState, and Controllers...")
+        return False  # Indicate failure
+    logger.info("Initializing OmniParserClient, VisualState, and InputController...")
     try:
         parser_client = OmniParserClient(
             server_url=config.OMNIPARSER_URL, auto_deploy=(not config.OMNIPARSER_URL)
         )
         visual_state = VisualState(parser_client=parser_client)
-        mouse_controller = MouseController()
-        keyboard_controller = KeyboardController()
+        controller = InputController()
         logger.success(
-            f"Client, VisualState, Controllers initialized. Parser URL: {parser_client.server_url}"
+            f"Client, VisualState, Controller initialized. Parser URL: {parser_client.server_url}"
         )
+    except ImportError as e:
+        logger.error(
+            f"Initialization failed due to missing dependency: {e}. Is pynput or pyobjc installed?"
+        )
+        return False
     except Exception as e:
         logger.error(f"Initialization failed: {e}", exc_info=True)
         return False
 
-    # 2. Use the provided User Goal
+    # 2. User Goal
     logger.info(f"User Goal: '{user_goal}'")
 
     action_history: List[str] = []
     goal_achieved = False
+    # Tracks if loop broke due to error vs completing/reaching max steps
+    final_step_success = True
+    last_step_completed = -1  # Track the index of the last fully completed step
 
     # --- Main Loop ---
     for step in range(MAX_STEPS):
         logger.info(f"\n--- Step {step + 1}/{MAX_STEPS} ---")
         step_start_time = time.time()
+        # Use 1-based index for user-friendly filenames
+        step_img_prefix = f"step_{step + 1}"
 
         # 3. Get CURRENT REAL State (Screenshot -> Parse -> Map)
         logger.info("Getting current screen state...")
+        current_image: Optional[Image.Image] = None
+        current_elements: List[UIElement] = []
         try:
-            await visual_state.update()
-            if not visual_state.elements:
-                logger.warning(
-                    f"No elements mapped from screen state at step {step + 1}. Trying again or stopping?"
-                )
-                # Optionally add a retry or break condition here
-                if step > 0:  # Don't stop on first step necessarily
-                    logger.error("Failed to get elements after first step. Stopping.")
-                    break
-                else:  # Allow maybe one failure on init
-                    time.sleep(1)
-                    continue  # Skip to next iteration hoping UI stabilizes
-            # Use the latest real state
+            visual_state.update()  # Synchronous update
+            current_elements = visual_state.elements or []
             current_image = visual_state._last_screenshot
-            current_elements = visual_state.elements
+
+            if not current_image:
+                logger.error("Failed to get screenshot for current state. Stopping.")
+                final_step_success = False
+                break  # Exit loop
+
             logger.info(
                 f"Current state captured with {len(current_elements)} elements."
             )
+
+            # Save Raw State Image
+            raw_state_path = os.path.join(
+                run_output_dir, f"{step_img_prefix}_state_raw.png"
+            )
+            try:
+                current_image.save(raw_state_path)
+                logger.info(f"Saved raw state to {raw_state_path}")
+            except Exception as save_e:
+                logger.warning(f"Could not save raw state image: {save_e}")
+
+            # Save Parsed State Image (with bounding boxes)
+            parsed_state_path = os.path.join(
+                run_output_dir, f"{step_img_prefix}_state_parsed.png"
+            )
+            try:
+                # Ensure draw_bounding_boxes is available
+                img_with_boxes = draw_bounding_boxes(
+                    current_image, current_elements, color="lime", show_ids=True
+                )
+                img_with_boxes.save(parsed_state_path)
+                logger.info(f"Saved parsed state visualization to {parsed_state_path}")
+            except NameError:
+                logger.warning(
+                    "draw_bounding_boxes function not found, cannot save parsed state image."
+                )
+            except Exception as draw_e:
+                logger.warning(f"Could not save parsed state image: {draw_e}")
+
         except Exception as e:
             logger.error(f"Failed to get visual state: {e}", exc_info=True)
+            final_step_success = False
             break  # Stop loop if state update fails
-
-        # Save current state image
-        current_state_img_path = os.path.join(OUTPUT_DIR, f"step_{step}_state.png")
-        if SAVE_IMAGES and current_image:
-            try:
-                current_image.save(current_state_img_path)
-                logger.info(f"Saved current state to {current_state_img_path}")
-            except Exception as save_e:
-                logger.warning(f"Could not save step state image: {save_e}")
 
         # 4. Plan Next Action using LLM Planner
         logger.info("Planning action with LLM...")
+        llm_plan: Optional[LLMActionPlan] = None
+        target_element: Optional[UIElement] = None
         try:
-            llm_plan, target_element_from_plan = (
-                plan_action_for_ui(  # Note: plan_action_for_ui returns element obj too
-                    elements=current_elements,
-                    user_goal=user_goal,
-                    action_history=action_history,
-                )
+            llm_plan, target_element = plan_action_for_ui(
+                elements=current_elements,
+                user_goal=user_goal,
+                action_history=action_history,
+                step=step,  # Pass 0-based step index for conditional logging
             )
             logger.info(f"LLM Reasoning: {llm_plan.reasoning}")
-            logger.info(
-                f"LLM Proposed Action: {llm_plan.action} on Element ID: {llm_plan.element_id}"
-            )
-            if llm_plan.text_to_type:
-                logger.info(f"Text to Type: '{llm_plan.text_to_type}'")
             logger.info(f"LLM Goal Complete Assessment: {llm_plan.is_goal_complete}")
-
-            # Ensure we have the target element object
-            target_element = next(
-                (el for el in current_elements if el.id == llm_plan.element_id), None
-            )
-            if target_element is None and not llm_plan.is_goal_complete:
-                logger.error(
-                    f"LLM chose element ID {llm_plan.element_id}, but it wasn't found. Stopping."
-                )
-                break
 
         except Exception as plan_e:
             logger.error(f"Error during LLM planning: {plan_e}", exc_info=True)
-            break
+            final_step_success = False
+            break  # Stop loop if planning fails
 
         # 5. Check for Goal Completion BEFORE acting
         if llm_plan.is_goal_complete:
             logger.success("LLM determined the goal is achieved!")
             goal_achieved = True
-            break  # Exit loop if goal achieved
+            last_step_completed = step  # Mark this step as completed before breaking
+            break  # Exit loop successfully
 
-        # Ensure we have a target element if goal not complete
-        if target_element is None:
+        # 6. Validate Target Element (Ensure click has a target)
+        if llm_plan.action == "click" and target_element is None:
             logger.error(
-                f"LLM did not indicate goal complete, but target element {llm_plan.element_id} is missing. Stopping."
+                f"Action 'click' requires element ID {llm_plan.element_id}, but it was not found in the current state. Stopping."
             )
-            break
+            final_step_success = False
+            break  # Stop loop if required element is missing
 
-        # 6. Visualize Planned Action
-        if SAVE_IMAGES and current_image:
-            highlight_img_path = os.path.join(OUTPUT_DIR, f"step_{step}_highlight.png")
+        # 7. Visualize Planned Action (Highlight Target OR Annotate Action)
+        if llm_plan and current_image:  # Check if we have a plan and image
+            highlight_img_path = os.path.join(
+                run_output_dir, f"{step_img_prefix}_action_highlight.png"
+            )
             try:
-                highlighted_image = draw_highlight(
-                    current_image, target_element, plan=llm_plan
+                # Call the function - it handles None element internally
+                highlighted_image = draw_action_highlight(
+                    current_image,
+                    target_element,  # Pass element (can be None)
+                    plan=llm_plan,
+                    color="red",
+                    width=3,
                 )
                 highlighted_image.save(highlight_img_path)
-                logger.info(f"Saved highlighted action to {highlight_img_path}")
+                logger.info(f"Saved action visualization to {highlight_img_path}")
+            except NameError:
+                logger.error(
+                    "draw_action_highlight function not found in utils, cannot visualize action."
+                )
             except Exception as draw_e:
-                logger.warning(f"Could not save highlight image: {draw_e}")
+                logger.warning(f"Could not save action visualization image: {draw_e}")
 
         # Record action for history BEFORE execution
         action_desc = f"Step {step + 1}: Planned {llm_plan.action}"
+        if target_element:
+            action_desc += (
+                f" on ID {target_element.id} ('{target_element.content[:30]}...')"
+            )
         if llm_plan.text_to_type:
-            action_desc += f" '{llm_plan.text_to_type[:20]}...'"
-        action_desc += (
-            f" on Element ID {target_element.id} ('{target_element.content[:30]}...')"
-        )
+            action_desc += f" Text='{llm_plan.text_to_type[:20]}...'"
+        if llm_plan.key_info:
+            action_desc += f" Key='{llm_plan.key_info}'"
         action_history.append(action_desc)
+        logger.debug(f"Added to history: {action_desc}")
 
-        # --- 7. Execute REAL Action ---
-        logger.info(f"Executing action: {llm_plan.action}...")  # Simplified log
+        # 8. Execute REAL Action using InputController
+        logger.info(f"Executing action: {llm_plan.action}...")
         action_success = False
         try:
             if visual_state.screen_dimensions is None:
-                logger.error("Cannot execute action: screen dimensions unknown.")
-                break
-
+                # Should not happen if screenshot was taken, but safety check
+                raise RuntimeError("Cannot execute action: screen dimensions unknown.")
+            # screen_w/h are physical pixel dimensions from screenshot
             screen_w, screen_h = visual_state.screen_dimensions
 
             if llm_plan.action == "click":
-                if target_element:
-                    abs_x = int(
-                        (target_element.bounds[0] + target_element.bounds[2] / 2)
-                        * screen_w
+                if target_element:  # Validation already done
+                    # Denormalize to get PHYSICAL PIXEL coordinates for center
+                    abs_x, abs_y = denormalize_coordinates(
+                        target_element.bounds[0],
+                        target_element.bounds[1],
+                        screen_w,
+                        screen_h,
+                        target_element.bounds[2],
+                        target_element.bounds[3],
                     )
-                    abs_y = int(
-                        (target_element.bounds[1] + target_element.bounds[3] / 2)
-                        * screen_h
-                    )
+                    # Convert to LOGICAL points for pynput controller
+                    logical_x = int(abs_x / scaling_factor)
+                    logical_y = int(abs_y / scaling_factor)
                     logger.info(
-                        f"Clicking element {target_element.id} at ({abs_x}, {abs_y})"
+                        f"Converted physical click ({abs_x},{abs_y}) to logical ({logical_x},{logical_y}) using factor {scaling_factor}"
                     )
-                    mouse_controller.move(abs_x, abs_y)
-                    time.sleep(0.1)
-                    mouse_controller.click()
-                    action_success = True
-                else:
-                    logger.error("Click planned but target element object not found.")
+                    action_success = controller.click(
+                        logical_x, logical_y, click_type="single"
+                    )
+                # No else needed, already validated above
 
             elif llm_plan.action == "type":
                 if llm_plan.text_to_type is not None:
-                    if target_element:  # Click target first if specified
-                        abs_x = int(
-                            (target_element.bounds[0] + target_element.bounds[2] / 2)
-                            * screen_w
+                    if target_element:  # Click if target specified
+                        # Denormalize to get PHYSICAL PIXEL coordinates for center
+                        abs_x, abs_y = denormalize_coordinates(
+                            target_element.bounds[0],
+                            target_element.bounds[1],
+                            screen_w,
+                            screen_h,
+                            target_element.bounds[2],
+                            target_element.bounds[3],
                         )
-                        abs_y = int(
-                            (target_element.bounds[1] + target_element.bounds[3] / 2)
-                            * screen_h
-                        )
+                        # Convert to LOGICAL points for pynput controller
+                        logical_x = int(abs_x / scaling_factor)
+                        logical_y = int(abs_y / scaling_factor)
                         logger.info(
-                            f"Clicking element {target_element.id} at ({abs_x}, {abs_y}) before typing..."
+                            f"Clicking element {target_element.id} at logical ({logical_x},{logical_y}) before typing..."
                         )
-                        mouse_controller.move(abs_x, abs_y)
-                        time.sleep(0.1)
-                        mouse_controller.click()
+                        clicked_before_type = controller.click(logical_x, logical_y)
+                        if not clicked_before_type:
+                            logger.warning(
+                                "Failed to click target element before typing, attempting to type anyway."
+                            )
+                        # Allow time for focus to shift after click
                         time.sleep(0.2)
-                    # Type the text
-                    logger.info(f"Typing text: '{llm_plan.text_to_type[:20]}...'")
-                    keyboard_controller.type(llm_plan.text_to_type)
-                    action_success = True
+                    else:
+                        # No target element specified (e.g., typing into Spotlight after Cmd+Space)
+                        logger.info(
+                            "No target element specified for type action, assuming focus is correct."
+                        )
+
+                    # Typing uses its own pynput method
+                    action_success = controller.type_text(llm_plan.text_to_type)
                 else:
-                    logger.error("Type planned but text_to_type is null.")
+                    logger.error(
+                        "Type planned but text_to_type is null."
+                    )  # Should be caught by Pydantic
 
             elif llm_plan.action == "press_key":
-                if llm_plan.key_info is not None:
-                    key_info = llm_plan.key_info
-                    logger.info(f"Pressing key(s): {key_info}")
-                    # TODO: Implement more robust parsing for combinations like "Cmd+Space"
-                    # This basic version handles simple key names recognized by pynput
-                    # (e.g., 'enter', 'cmd', 'ctrl', 'shift', 'space', 'a', 'b', ...)
-                    # You might need to map strings like "Cmd+Space" to controller actions
-                    # like press(Key.cmd), press(Key.space), release(Key.space), release(Key.cmd)
-                    if "+" in key_info:  # Very basic combo handling attempt
-                        parts = key_info.split("+")
-                        # Requires mapping 'Cmd'/'Win' etc to pynput Key enum
-                        logger.warning("Key combinations not fully implemented yet.")
-                        # Placeholder: press first part for now
-                        keyboard_controller.press(parts[0].strip().lower())
-                    else:
-                        keyboard_controller.press(key_info.lower())  # Assume simple key
-
-                    action_success = True
+                if llm_plan.key_info:
+                    action_success = controller.execute_key_string(llm_plan.key_info)
                 else:
-                    logger.error("Press_key planned but key_info is null.")
+                    logger.error(
+                        "Press_key planned but key_info is null."
+                    )  # Should be caught by Pydantic
 
             elif llm_plan.action == "scroll":
-                # Basic scroll implementation (adjust direction/amount as needed)
-                scroll_amount = 5  # Example: Scroll down 5 units
-                scroll_x, scroll_y = 0, -scroll_amount
-                logger.info(f"Scrolling down by {scroll_amount} units...")
-                mouse_controller.scroll(scroll_x, scroll_y)
-                action_success = True
-                logger.success("Executed scroll action.")
+                # Basic scroll, direction might be inferred crudely from reasoning
+                # Scroll amount units depend on pynput/OS, treat as steps/lines
+                scroll_dir = llm_plan.reasoning.lower()
+                scroll_amount_steps = 3  # Scroll N steps/lines
+                scroll_dy = (
+                    -scroll_amount_steps
+                    if "down" in scroll_dir
+                    else scroll_amount_steps
+                    if "up" in scroll_dir
+                    else 0
+                )
+                scroll_dx = (
+                    -scroll_amount_steps
+                    if "left" in scroll_dir
+                    else scroll_amount_steps
+                    if "right" in scroll_dir
+                    else 0
+                )
+
+                if scroll_dx != 0 or scroll_dy != 0:
+                    action_success = controller.scroll(scroll_dx, scroll_dy)
+                else:
+                    logger.warning(
+                        "Scroll planned, but direction unclear or zero amount. Skipping scroll."
+                    )
+                    action_success = True  # No action needed counts as success here
+
             else:
-                logger.warning(f"Action type '{llm_plan.action}' not implemented.")
+                # Should not happen if LLM plan validation works
+                logger.warning(
+                    f"Action type '{llm_plan.action}' execution not implemented."
+                )
                 action_success = False
 
-            if not action_success:
-                logger.error("Action execution step failed.")
-                # Decide if loop should break on action failure
-                # break
+            # Check action result and break loop if failed
+            if action_success:
+                logger.success("Action executed successfully.")
+            else:
+                logger.error(
+                    f"Action '{llm_plan.action}' execution failed or was skipped."
+                )
+                final_step_success = False
+                break  # Stop loop if low-level action failed
 
         except Exception as exec_e:
+            # Catch unexpected errors during execution block
             logger.error(f"Error during action execution: {exec_e}", exc_info=True)
+            final_step_success = False
             break  # Stop loop on execution error
 
-        # --- REMOVED SIMULATION BLOCK ---
+        # Mark step as completed successfully before proceeding
+        last_step_completed = step
 
-        # Wait for UI to settle after action before next state capture
-        time.sleep(1.5)  # Increased wait time after real action
+        # Wait for UI to settle after the action
+        time.sleep(1.5)  # Adjust as needed
         logger.info(f"Step {step + 1} duration: {time.time() - step_start_time:.2f}s")
-        # Loop continues, will call visual_state.update() at the start of the next iteration
 
     # --- End of Loop ---
     logger.info("\n--- Demo Finished ---")
     if goal_achieved:
-        logger.success("Overall goal marked as achieved by LLM during execution.")
-    elif step == MAX_STEPS - 1:
-        logger.warning(
-            f"Reached maximum steps ({MAX_STEPS}) without goal completion flag being set."
-        )
+        logger.success("Overall goal marked as achieved by LLM.")
+    # Check if loop completed all steps successfully OR broke early due to goal achieved
+    elif final_step_success and (last_step_completed == MAX_STEPS - 1 or goal_achieved):
+        if not goal_achieved:  # Means max steps reached
+            logger.warning(
+                f"Reached maximum steps ({MAX_STEPS}) without goal completion."
+            )
+        # If goal_achieved is True, success message already printed
     else:
-        logger.error("Execution stopped prematurely (check logs).")
+        # Loop broke early due to an error
+        logger.error(
+            f"Execution stopped prematurely after Step {last_step_completed + 1} due to an error."
+        )
 
-    # Save final state (which will be the last simulated state)
-    final_state_img_path = os.path.join(OUTPUT_DIR, "final_state.png")
-    if SAVE_IMAGES and current_image:
+    # Save the VERY final screen state
+    logger.info("Capturing final screen state...")
+    final_image = take_screenshot()
+    if final_image:
+        final_state_img_path = os.path.join(run_output_dir, "final_state.png")
         try:
-            current_image.save(final_state_img_path)
-            logger.info(f"Saved final simulated state to {final_state_img_path}")
+            final_image.save(final_state_img_path)
+            logger.info(f"Saved final screen state to {final_state_img_path}")
         except Exception as save_e:
             logger.warning(f"Could not save final state image: {save_e}")
 
+    logger.info(f"Debug images saved in: {run_output_dir}")
     logger.info(
-        "Reminder: Run 'python omnimcp/omniparser/server.py stop' to shut down the EC2 instance if it was deployed."
+        "Reminder: Run 'python -m omnimcp.omniparser.server stop' to shut down the EC2 instance if deployed."
     )
 
-    return True
+    # Return True if goal was achieved, or if max steps were reached without error
+    return goal_achieved or (
+        final_step_success and last_step_completed == MAX_STEPS - 1
+    )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Run OmniMCP demo with a specific goal."
-    )
-    parser.add_argument(
-        "user_goal",
-        nargs="?",
-        default=None,
-        help="The natural language goal (optional).",
-    )
-    args = parser.parse_args()
-    cli_goal = args.user_goal
-
     if not config.ANTHROPIC_API_KEY:
-        print("ERROR: ANTHROPIC_API_KEY not found. Exiting.")
+        print("ERROR: ANTHROPIC_API_KEY missing.")
         sys.exit(1)
 
-    # --- WARNING ---
-    print("\n" + "=" * 50)
-    print(" WARNING: This script will take control of your mouse and keyboard!")
-    print(" Please ensure no sensitive information is visible.")
-    print(" To stop execution, move your mouse to a screen corner or press Ctrl+C.")
-    print("=" * 50 + "\n")
-    # Add a countdown
+    print("\n" + "=" * 60)
+    print(" WARNING: This script WILL take control of your mouse and keyboard!")
+    print(f"          TARGET OS: {platform.system()}")
+    print(" Please ensure no sensitive information is visible on screen.")
+    print(" To stop execution manually: Move mouse RAPIDLY to a screen corner")
+    print("                           OR press Ctrl+C in the terminal.")
+    print("=" * 60 + "\n")
     for i in range(5, 0, -1):
         print(f"Starting in {i}...", end="\r")
         time.sleep(1)
-    print("Starting now!       ")
-    # --- END WARNING ---
+    print("Starting now!              ")
 
-    # Run the async main function
-    success = False
-    if cli_goal:
-        logger.info(f"Using user goal from command line: '{cli_goal}'")
-        # Pass goal to the async function correctly
-        success = asyncio.run(run_real_planner_demo(user_goal=cli_goal))
-    else:
-        logger.info("No goal provided on command line, using default goal.")
-        # Call without user_goal kwarg to use the function's default
-        success = asyncio.run(run_real_planner_demo())
-
-    if not success:
+    try:
+        # Use fire to handle CLI arguments for run_real_planner_demo
+        fire.Fire(run_real_planner_demo)
+        # Assume success if fire completes without raising an exception here
+        sys.exit(0)
+    except KeyboardInterrupt:
+        logger.warning("Execution interrupted by user (Ctrl+C).")
+        sys.exit(1)
+    except Exception:
+        logger.exception("An unexpected error occurred during the demo execution.")
         sys.exit(1)

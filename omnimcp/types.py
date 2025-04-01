@@ -1,7 +1,9 @@
 # omnimcp/types.py
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, Literal
+
+from pydantic import BaseModel, Field, field_validator, ValidationInfo
 
 
 # Define Bounds (assuming normalized coordinates 0.0-1.0)
@@ -118,3 +120,83 @@ class DebugContext:
     def save_snapshot(self, path: str) -> None:
         """Save debug snapshot for analysis."""
         # TODO: Implement snapshot saving
+
+
+class LLMActionPlan(BaseModel):
+    """Defines the structured output expected from the LLM for action planning."""
+
+    # Required fields: Use '...' as first arg OR Field(description=...) might work in V2+
+    # Using Field(..., description=...) is explicit and clear for required fields.
+    reasoning: str = Field(
+        ..., description="Step-by-step thinking process leading to the chosen action."
+    )
+    action: Literal["click", "type", "scroll", "press_key"] = Field(
+        ..., description="The single next action to perform."
+    )
+    is_goal_complete: bool = Field(
+        ...,
+        description="Set to true if the user's overall goal is fully achieved by the current state, false otherwise.",
+    )
+
+    # Optional fields: Use 'default=None'
+    element_id: Optional[int] = Field(
+        default=None,
+        description="The ID of the target UI element IF the action is 'click' or 'type'. Must be null for 'press_key' and 'scroll'.",
+    )
+    text_to_type: Optional[str] = Field(
+        default=None,
+        description="Text to type IF action is 'type'. Must be null otherwise.",
+    )
+    key_info: Optional[str] = Field(
+        default=None,
+        description="Key or shortcut to press IF action is 'press_key' (e.g., 'Enter', 'Cmd+Space', 'Win'). Must be null otherwise, UNLESS is_goal_complete is true.",  # Added note
+    )
+    is_goal_complete: bool = Field(
+        ..., description="Set to true if the user's overall goal is fully achieved..."
+    )
+
+    # Validators remain the same
+    @field_validator("element_id")
+    @classmethod
+    def check_element_id(cls, v: Optional[int], info: ValidationInfo) -> Optional[int]:
+        action = info.data.get("action")
+        # Click requires element_id
+        if action == "click" and v is None:
+            raise ValueError("element_id is required for action 'click'")
+        # Scroll and press_key must not have element_id
+        if action in ["scroll", "press_key"] and v is not None:
+            raise ValueError(f"element_id must be null for action '{action}'")
+        # Type *can* have null element_id (e.g., typing in search bar)
+        return v
+
+    @field_validator("text_to_type")
+    @classmethod
+    def check_text_to_type(
+        cls, v: Optional[str], info: ValidationInfo
+    ) -> Optional[str]:
+        action = info.data.get("action")
+        if action == "type" and v is None:
+            # Allow empty string for type, but not None if action is type
+            raise ValueError("text_to_type is required for action 'type'")
+        if action != "type" and v is not None:
+            raise ValueError("text_to_type must be null for actions other than 'type'")
+        return v
+
+    @field_validator("key_info")
+    @classmethod
+    def check_key_info(cls, v: Optional[str], info: ValidationInfo) -> Optional[str]:
+        action = info.data.get("action")
+        is_complete = info.data.get("is_goal_complete")  # Get goal completion status
+
+        # Allow key_info to be None if the goal is already complete, regardless of action
+        if is_complete:
+            return v  # Allow None or any value if goal is complete
+
+        # Original validation: If goal is NOT complete, enforce rules
+        if action == "press_key" and v is None:
+            raise ValueError(
+                "key_info is required for action 'press_key' when goal is not complete"
+            )
+        if action != "press_key" and v is not None:
+            raise ValueError("key_info must be null for actions other than 'press_key'")
+        return v
