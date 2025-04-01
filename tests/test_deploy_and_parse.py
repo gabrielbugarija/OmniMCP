@@ -5,19 +5,12 @@ A simple script to test OmniParser deployment, screenshotting,
 parsing, and mapping to UIElements using VisualState.
 """
 
-import os
 import sys
 import asyncio  # Needed for async VisualState.update()
-import pytest
 
-pytestmark = pytest.mark.skipif(
-    sys.platform == "linux" and not os.environ.get("DISPLAY"),
-    reason="Requires GUI environment (DISPLAY)",
-)
-
-from omnimcp.utils import logger  # noqa: E402
-from omnimcp.omniparser.client import OmniParserClient  # noqa: E402
-from omnimcp.omnimcp import VisualState  # noqa: E402
+from omnimcp.utils import logger
+from omnimcp.omniparser.client import OmniParserClient
+from omnimcp.omnimcp import VisualState
 
 
 if __name__ == "__main__":

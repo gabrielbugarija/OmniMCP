@@ -1,13 +1,40 @@
 # omnimcp/input.py
 
+import os
 import sys
 import time
 from typing import Optional, Literal, List, Tuple, Dict, Any, Union
 
 from loguru import logger
-from pynput import keyboard, mouse
 
-from omnimcp.utils import log_action
+keyboard = None
+mouse = None
+_pynput_error = None
+
+# Only attempt to import pynput if not on headless Linux
+# (Check platform and presence of DISPLAY environment variable)
+if sys.platform != "linux" or os.environ.get("DISPLAY"):
+    try:
+        from pynput import keyboard, mouse
+
+        # Test if backend loaded successfully (might still fail later)
+        _kb_test = keyboard.Controller()
+        _ms_test = mouse.Controller()
+        logger.info("pynput imported successfully.")
+    except ImportError as e:
+        _pynput_error = f"pynput import failed: {e}"
+        logger.error(_pynput_error)
+    except Exception as e:  # Catch potential backend errors during test instantiation
+        _pynput_error = f"pynput backend failed to load: {e}"
+        logger.error(_pynput_error)
+        # Ensure keyboard/mouse are reset to None if test instantiation fails
+        keyboard = None
+        mouse = None
+else:
+    _pynput_error = "Skipping pynput import in headless Linux environment (no DISPLAY)."
+    logger.warning(_pynput_error)
+
+from omnimcp.utils import log_action  # noqa: E402
 
 # Define Bounds type if not imported from elsewhere
 BoundsTuple = Tuple[float, float, float, float]  # (norm_x, norm_y, norm_w, norm_h)
