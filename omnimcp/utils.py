@@ -464,8 +464,8 @@ except IOError:
 
 def draw_action_highlight(
     image: Image.Image,
-    element: "UIElement",  # Forward reference if UIElement not defined/imported here
-    plan: "LLMActionPlan",  # Forward reference if LLMActionPlan not defined/imported here
+    element: UIElement,
+    plan: LLMActionPlan,
     color: str = "red",
     width: int = 3,
     dim_factor: float = 0.5,

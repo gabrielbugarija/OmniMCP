@@ -155,14 +155,22 @@ class LLMActionPlan(BaseModel):
         ..., description="Set to true if the user's overall goal is fully achieved..."
     )
 
-    # Validators remain the same
     @field_validator("element_id")
     @classmethod
     def check_element_id(cls, v: Optional[int], info: ValidationInfo) -> Optional[int]:
         action = info.data.get("action")
+        is_complete = info.data.get("is_goal_complete")  # Get goal completion status
+
+        # Allow element_id to be None if the goal is already complete
+        if is_complete:
+            return v  # Allow None or any value if goal is complete
+
+        # Original validation (only applied if goal is NOT complete)
         # Click requires element_id
         if action == "click" and v is None:
-            raise ValueError("element_id is required for action 'click'")
+            raise ValueError(
+                "element_id is required for action 'click' when goal is not complete"
+            )
         # Scroll and press_key must not have element_id
         if action in ["scroll", "press_key"] and v is not None:
             raise ValueError(f"element_id must be null for action '{action}'")

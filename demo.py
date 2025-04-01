@@ -200,10 +200,6 @@ def run_real_planner_demo(
                 )
                 highlighted_image.save(highlight_img_path)
                 logger.info(f"Saved action visualization to {highlight_img_path}")
-            except NameError:
-                logger.error(
-                    "draw_action_highlight function not found in utils, cannot visualize action."
-                )
             except Exception as draw_e:
                 logger.warning(f"Could not save action visualization image: {draw_e}")
 

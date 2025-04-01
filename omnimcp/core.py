@@ -84,7 +84,7 @@ def plan_action_for_ui(
         f"Planning action for goal: '{user_goal}' with {len(elements)} elements. History: {len(action_history)} steps."
     )
 
-    MAX_ELEMENTS_IN_PROMPT = 50
+    MAX_ELEMENTS_IN_PROMPT = 1000
     if len(elements) > MAX_ELEMENTS_IN_PROMPT:
         logger.warning(
             f"Too many elements ({len(elements)}), truncating to {MAX_ELEMENTS_IN_PROMPT} for prompt."
