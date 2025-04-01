@@ -5,22 +5,24 @@ Tests for core OmniMCP/VisualState functionality using synthetic test images
 and a mocked OmniParserClient.
 """
 
+import os
 import pytest
+import sys
 
 # Make sure patch is imported from unittest.mock
 from unittest.mock import patch, MagicMock
 from PIL import Image  # Keep needed imports
 
-# Import classes under test
-from omnimcp.omnimcp import OmniMCP, VisualState
-from omnimcp.types import UIElement, ActionVerification  # Keep needed types
 
-# Import helpers from the correct location
-from omnimcp.testing_utils import generate_test_ui, generate_action_test_pair
+pytestmark = pytest.mark.skipif(
+    sys.platform == "linux" and not os.environ.get("DISPLAY"),
+    reason="Requires GUI environment (DISPLAY)",
+)
 
-# Import real client only needed for spec in mock below
-from omnimcp.omniparser.client import OmniParserClient
-# Import controllers to patch them where OmniMCP imports them
+from omnimcp.omnimcp import OmniMCP, VisualState  # noqa: E402
+from omnimcp.types import UIElement, ActionVerification  # noqa: E402
+from omnimcp.testing_utils import generate_test_ui, generate_action_test_pair  # noqa: E402
+from omnimcp.omniparser.client import OmniParserClient  # noqa: E402
 
 
 # Mock OmniParserClient class for testing VisualState
