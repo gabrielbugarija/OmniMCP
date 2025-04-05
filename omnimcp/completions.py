@@ -63,7 +63,7 @@ def format_chat_messages(messages: List[Dict[str, str]]) -> str:
         content = msg.get("content", "")
         result.append("=" * 40 + f" {role} " + "=" * 40)
         result.append(content)
-    result.append("=" * 80 + "=" * (len(" ASSISTANT ")//2)) # End marker
+    result.append("=" * 80 + "=" * (len(" ASSISTANT ") // 2))  # End marker
     return "\n".join(result)
 
 
