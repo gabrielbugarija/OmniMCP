@@ -4,3 +4,6 @@
 omnimcp.egg-info/
 omnimcp.log
 __pycache__
+runs/
+logs/
+images/*/

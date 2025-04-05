@@ -8,9 +8,9 @@ from typing import Callable, List, Optional, Tuple, Protocol, Dict
 from PIL import Image
 
 
-# Used for type hinting if Protocol is simple:
-from .types import LLMActionPlan, UIElement
-from .utils import (
+from omnimcp import config, setup_run_logging
+from omnimcp.types import LLMActionPlan, UIElement
+from omnimcp.utils import (
     denormalize_coordinates,
     draw_action_highlight,
     draw_bounding_boxes,
@@ -194,10 +194,16 @@ class AgentExecutor:
 
     # Comparison Note:
     # This `run` method implements an explicit, sequential perceive-plan-act loop.
-    # Alternative agent architectures exist... (rest of comment remains same)
+    # Alternative agent architectures exist, such as:
+    # - ReAct (Reasoning-Acting): Where the LLM explicitly decides between
+    #   reasoning steps and action steps.
+    # - Callback-driven: Where UI events or timers might trigger agent actions.
+    # - More complex state machines or graph-based execution flows.
+    # This simple sequential loop provides a clear baseline. Future work might explore
+    # these alternatives for more complex or reactive tasks.
 
     def run(
-        self, goal: str, max_steps: int = 10, output_base_dir: str = "runs"
+        self, goal: str, max_steps: int = 10, output_base_dir: Optional[str] = None
     ) -> bool:
         """
         Runs the main perceive-plan-act loop to achieve the goal.
@@ -206,16 +212,28 @@ class AgentExecutor:
             goal: The natural language goal for the agent.
             max_steps: Maximum number of steps to attempt.
             output_base_dir: Base directory to save run artifacts (timestamped).
+                            If None, uses config.RUN_OUTPUT_DIR.
 
         Returns:
             True if the goal was achieved, False otherwise (error or max steps reached).
         """
+
+        # Use configured output dir if none provided
+        if output_base_dir is None:
+            output_base_dir = config.RUN_OUTPUT_DIR
+
         run_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         run_output_dir = os.path.join(output_base_dir, run_timestamp)
+
         try:
             os.makedirs(run_output_dir, exist_ok=True)
+
+            # Configure run-specific logging
+            log_path = setup_run_logging(run_output_dir)
+
             logger.info(f"Starting agent run. Goal: '{goal}'")
             logger.info(f"Saving outputs to: {run_output_dir}")
+            logger.info(f"Run log file: {log_path}")
         except OSError as e:
             logger.error(f"Failed to create output directory {run_output_dir}: {e}")
             return False
