@@ -1,8 +1,3 @@
-You are absolutely right. The README has become quite verbose, and there's definite repetition (like the "Running the Demos" section appearing twice). Let's streamline it significantly, merge related sections, and shorten the examples.
-
-Here's a more terse and consolidated version of the `README.md`:
-
-```markdown
 # OmniMCP
 
 [![CI](https://github.com/OpenAdaptAI/OmniMCP/actions/workflows/ci.yml/badge.svg)](https://github.com/OpenAdaptAI/OmniMCP/actions/workflows/ci.yml)
@@ -79,17 +74,17 @@ python cli.py --help
 ```
 Debug outputs are saved in `runs/<timestamp>/`.
 
-**Note on MCP Server:** An experimental MCP server (`OmniMCP` class in `omnimcp/omnimcp.py`) exists but is separate from the primary `cli.py`/`AgentExecutor` workflow.
+**Note on MCP Server:** An experimental MCP server (`OmniMCP` class in `omnimcp/mcp_server.py`) exists but is separate from the primary `cli.py`/`AgentExecutor` workflow.
 
 ## Architecture
 
 1.  **CLI** (`cli.py`) - Entry point, setup, starts Executor.
 2.  **Agent Executor** (`omnimcp/agent_executor.py`) - Orchestrates loop, manages state/artifacts.
-3.  **Visual State Manager** (`omnimcp/omnimcp.py`) - Perception (screenshot, calls parser).
+3.  **Visual State Manager** (`omnimcp/visual_state.py`) - Perception (screenshot, calls parser).
 4.  **OmniParser Client & Deploy** (`omnimcp/omniparser/`) - Manages OmniParser server communication/deployment.
 5.  **LLM Planner** (`omnimcp/core.py`) - Generates action plan.
 6.  **Input Controller** (`omnimcp/input.py`) - Executes actions (mouse/keyboard).
-7.  **(Optional) MCP Server** (`omnimcp/omnimcp.py`) - Experimental MCP interface.
+7.  **(Optional) MCP Server** (`omnimcp/mcp_server.py`) - Experimental MCP interface.
 
 ## Development
 
@@ -127,7 +122,7 @@ Detailed logs are in `logs/run_YYYY-MM-DD_HH-mm-ss.log` (`LOG_LEVEL=DEBUG` in `.
 # --- Agent Execution Loop Example Step ---
 2025-MM-DD HH:MM:SS | INFO     | omnimcp.agent_executor:run:... - --- Step N/10 ---
 2025-MM-DD HH:MM:SS | DEBUG    | omnimcp.agent_executor:run:... - Perceiving current screen state...
-2025-MM-DD HH:MM:SS | INFO     | omnimcp.omnimcp:update:... - VisualState update complete. Found X elements. Took Y.YYs.
+2025-MM-DD HH:MM:SS | INFO     | omnimcp.visual_state:update:... - VisualState update complete. Found X elements. Took Y.YYs.
 2025-MM-DD HH:MM:SS | INFO     | omnimcp.agent_executor:run:... - Perceived state with X elements.
 ... (Save artifacts) ...
 2025-MM-DD HH:MM:SS | DEBUG    | omnimcp.agent_executor:run:... - Planning next action...
