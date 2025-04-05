@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 # cli.py
 
 """
@@ -10,20 +11,7 @@ import time
 
 import fire
 
-# Import necessary components from the project
-from omnimcp.agent_executor import AgentExecutor
-from omnimcp.config import config
-from omnimcp.core import plan_action_for_ui
-from omnimcp.input import InputController, _pynput_error  # Check pynput import status
-from omnimcp.omniparser.client import OmniParserClient
-from omnimcp.visual_state import VisualState
-from omnimcp.utils import (
-    logger,
-    draw_bounding_boxes,
-    draw_action_highlight,
-    NSScreen,  # Check for AppKit on macOS
-)
-
+from omnimcp.utils import logger
 
 # Default configuration
 DEFAULT_OUTPUT_DIR = "runs"
@@ -35,6 +23,7 @@ def run(
     goal: str = DEFAULT_GOAL,
     max_steps: int = DEFAULT_MAX_STEPS,
     output_dir: str = DEFAULT_OUTPUT_DIR,
+    ci_mode: bool = False,
 ):
     """
     Runs the OmniMCP agent to achieve a specified goal.
@@ -43,9 +32,34 @@ def run(
         goal: The natural language goal for the agent.
         max_steps: Maximum number of steps to attempt.
         output_dir: Base directory to save run artifacts (timestamped subdirs).
+        ci_mode: Run in CI mode (skips API validation and actual execution).
     """
     # --- Initial Checks ---
     logger.info("--- OmniMCP CLI ---")
+
+    # Skip import-time checks if we're in CI mode
+    if ci_mode:
+        logger.info("Running in CI mode - skipping credential checks and execution")
+        return 0
+
+    # Delay imports to avoid credential checks at import time
+    try:
+        # Import necessary components from the project
+        from omnimcp.config import config
+        from omnimcp.input import InputController, _pynput_error
+        from omnimcp.agent_executor import AgentExecutor
+        from omnimcp.core import plan_action_for_ui
+        from omnimcp.omniparser.client import OmniParserClient
+        from omnimcp.visual_state import VisualState
+        from omnimcp.utils import (
+            draw_bounding_boxes,
+            draw_action_highlight,
+            NSScreen,  # Check for AppKit on macOS
+        )
+    except ImportError as e:
+        logger.critical(f"Required dependency not found: {e}")
+        return 1
+
     logger.info("Performing initial checks...")
     success = True
 
@@ -84,7 +98,7 @@ def run(
 
     if not success:
         logger.error("Prerequisite checks failed. Exiting.")
-        sys.exit(1)
+        return 1
 
     # --- Component Initialization ---
     logger.info("\nInitializing components...")
@@ -116,10 +130,10 @@ def run(
         logger.critical(
             "   Ensure all requirements are installed (`uv pip install -e .`)"
         )
-        sys.exit(1)
+        return 1
     except Exception as e:
         logger.critical(f"❌ Component initialization failed: {e}", exc_info=True)
-        sys.exit(1)
+        return 1
 
     # --- Agent Executor Initialization ---
     logger.info("\nInitializing Agent Executor...")
@@ -134,7 +148,7 @@ def run(
         logger.success("✅ Agent Executor initialized successfully.")
     except Exception as e:
         logger.critical(f"❌ Agent Executor initialization failed: {e}", exc_info=True)
-        sys.exit(1)
+        return 1
 
     # --- User Confirmation & Start ---
     print("\n" + "=" * 60)
@@ -159,13 +173,13 @@ def run(
         )
     except KeyboardInterrupt:
         logger.warning("\nExecution interrupted by user (Ctrl+C).")
-        sys.exit(1)
+        return 1
     except Exception as run_e:
         logger.critical(
             f"\nAn unexpected error occurred during the agent run: {run_e}",
             exc_info=True,
         )
-        sys.exit(1)
+        return 1
     finally:
         # Optional: Add cleanup here if needed (e.g., stopping parser server)
         logger.info(
@@ -176,13 +190,20 @@ def run(
     # --- Exit ---
     if overall_success:
         logger.success("\nAgent run finished successfully (goal achieved).")
-        sys.exit(0)
+        return 0
     else:
         logger.error(
             "\nAgent run finished unsuccessfully (goal not achieved or error occurred)."
         )
-        sys.exit(1)
+        return 1
+
+
+def main():
+    """Main entry point that handles Fire's return code conversion."""
+    result = fire.Fire(run)
+    if isinstance(result, int):
+        sys.exit(result)
 
 
 if __name__ == "__main__":
-    fire.Fire(run)
+    main()
