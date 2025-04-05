@@ -13,8 +13,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class OmniMCPConfig(BaseSettings):
     """Configuration settings for OmniMCP."""
 
-    DEBUG_FULL_PROMPTS: bool = False
-
     LLM_PROVIDER: str = "anthropic"
 
     # Claude API configuration
@@ -63,6 +61,7 @@ class OmniMCPConfig(BaseSettings):
     # Debug settings
     # DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
+    DEBUG_FULL_PROMPTS: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",
