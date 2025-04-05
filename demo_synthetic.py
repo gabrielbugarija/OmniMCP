@@ -1,8 +1,12 @@
 # demo_synthetic.py
+"""
+OmniMCP Demo: Synthetic Perception -> LLM Planner -> Synthetic Action Validation.
+Generates UI images and simulates the loop without real screen interaction.
+"""
 
 import os
 import time
-from typing import List, Optional  # Import Any for plan typing
+from typing import List, Optional
 
 # Import necessary components from the project
 from omnimcp.synthetic_ui import (
@@ -10,17 +14,30 @@ from omnimcp.synthetic_ui import (
     simulate_action,
     draw_highlight,  # Use the original draw_highlight from synthetic_ui
 )
-from omnimcp.core import plan_action_for_ui, LLMActionPlan  # Import the Pydantic model
-from omnimcp.utils import logger  # Assuming logger is configured elsewhere
-from omnimcp.types import UIElement  # Import UIElement
+from omnimcp.core import plan_action_for_ui, LLMActionPlan
+from omnimcp.utils import logger
+from omnimcp.types import UIElement
+
+# NOTE ON REFACTORING:
+# The main loop structure in this script (run_synthetic_planner_demo) is similar
+# to the core logic now encapsulated in `omnimcp.agent_executor.AgentExecutor`.
+# In the future, this synthetic demo could be refactored to:
+# 1. Create synthetic implementations of the PerceptionInterface and ExecutionInterface.
+# 2. Instantiate AgentExecutor with these synthetic components.
+# 3. Call `agent_executor.run(...)`.
+# This would further consolidate the core loop logic and allow testing the
+# AgentExecutor orchestration with controlled, synthetic inputs/outputs.
+# For now, this script remains separate to demonstrate the synthetic setup
+# independently.
+
 
 # --- Configuration ---
-OUTPUT_DIR = "demo_output_multistep"  # Keep original output dir for synthetic demo
+OUTPUT_DIR = "demo_output_multistep"
 SAVE_IMAGES = True
-MAX_STEPS = 6  # Keep original max steps for this demo
+MAX_STEPS = 6
 
 
-def run_multi_step_demo():
+def run_synthetic_planner_demo():
     """Runs the multi-step OmniMCP demo using synthetic UI and LLM planning."""
     logger.info("--- Starting OmniMCP Multi-Step Synthetic Demo ---")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -40,13 +57,13 @@ def run_multi_step_demo():
     logger.info(f"User Goal: '{user_goal}'")
 
     action_history: List[str] = []
-    goal_achieved_flag = False  # Use a flag to signal completion after the step runs
-    last_step_completed = -1  # Track last successful step index
+    goal_achieved_flag = False
+    last_step_completed = -1
 
     # --- Main Loop ---
     for step in range(MAX_STEPS):
         logger.info(f"\n--- Step {step + 1}/{MAX_STEPS} ---")
-        step_img_prefix = f"step_{step + 1}"  # Use 1-based index for filenames
+        step_img_prefix = f"step_{step + 1}"
 
         # Save/Show current state *before* planning/highlighting
         current_state_img_path = os.path.join(
@@ -65,10 +82,10 @@ def run_multi_step_demo():
         target_element: Optional[UIElement] = None
         try:
             llm_plan, target_element = plan_action_for_ui(
-                elements=elements,  # Pass current elements
+                elements=elements,
                 user_goal=user_goal,
                 action_history=action_history,
-                step=step,  # Pass step index
+                step=step,
             )
 
             logger.info(f"LLM Reasoning: {llm_plan.reasoning}")
@@ -81,43 +98,31 @@ def run_multi_step_demo():
                 logger.info(f"Key Info: '{llm_plan.key_info}'")
             logger.info(f"LLM Goal Complete Assessment: {llm_plan.is_goal_complete}")
 
-            # 3. Check for Goal Completion Flag (but don't break loop yet)
+            # 3. Check for Goal Completion Flag
             if llm_plan.is_goal_complete:
                 logger.info(
                     "LLM flag indicates goal should be complete after this action."
                 )
-                goal_achieved_flag = (
-                    True  # Set flag to break after this step's simulation
-                )
+                goal_achieved_flag = True
 
             # --- Updated Validation Check ---
-            # Validate target element ONLY IF the goal is NOT yet complete AND action requires it
             if not goal_achieved_flag:
-                # Click requires a valid target element found in the current state
                 if llm_plan.action == "click" and not target_element:
                     logger.error(
                         f"LLM planned 'click' on invalid element ID ({llm_plan.element_id}). Stopping."
                     )
-                    break  # Stop if click is impossible
-
-                # Type MIGHT require a target in synthetic demo, depending on simulate_action logic
-                # If simulate_action assumes type always targets a field, uncomment below
-                # if llm_plan.action == "type" and not target_element:
-                #     logger.error(f"LLM planned 'type' on invalid element ID ({llm_plan.element_id}). Stopping.")
-                #     break
-            # --- End Updated Validation Check ---
+                    break
 
             # 4. Visualize Planned Action (uses synthetic_ui.draw_highlight)
             highlight_img_path = os.path.join(
                 OUTPUT_DIR, f"{step_img_prefix}_highlight.png"
             )
-            if target_element:  # Only draw highlight if element exists
+            if target_element:
                 try:
-                    # Pass the llm_plan to the draw_highlight function
                     highlighted_image = draw_highlight(
                         image,
                         target_element,
-                        plan=llm_plan,  # Pass the plan object here
+                        plan=llm_plan,
                         color="lime",
                         width=4,
                     )
@@ -129,14 +134,27 @@ def run_multi_step_demo():
                 except Exception as draw_e:
                     logger.warning(f"Could not save highlight image: {draw_e}")
             else:
-                logger.info("No target element to highlight for this step.")
+                # For non-element actions like press_key, still save an image showing the state
+                # before the action, potentially adding text annotation later if needed.
+                if SAVE_IMAGES:
+                    try:
+                        image.save(
+                            highlight_img_path.replace(
+                                "_highlight.png", "_state_before_no_highlight.png"
+                            )
+                        )
+                        logger.info("No target element, saved pre-action state.")
+                    except Exception as save_e:
+                        logger.warning(
+                            f"Could not save pre-action state image: {save_e}"
+                        )
 
             # Record action for history *before* simulation changes state
             action_desc = f"Action: {llm_plan.action}"
             if llm_plan.text_to_type:
                 action_desc += f" '{llm_plan.text_to_type}'"
             if llm_plan.key_info:
-                action_desc += f" Key='{llm_plan.key_info}'"  # Add key_info if present
+                action_desc += f" Key='{llm_plan.key_info}'"
             if target_element:
                 action_desc += (
                     f" on Element ID {target_element.id} ('{target_element.content}')"
@@ -144,9 +162,8 @@ def run_multi_step_demo():
             action_history.append(action_desc)
             logger.debug(f"Added to history: {action_desc}")
 
-            # 5. Simulate Action -> Get New State (ALWAYS run this for the planned step)
+            # 5. Simulate Action -> Get New State
             logger.info("Simulating action...")
-            # Extract username now in case login is successful in this step
             username = next(
                 (
                     el.content
@@ -156,12 +173,10 @@ def run_multi_step_demo():
                 "User",
             )
 
-            # simulate_action needs to handle the LLMActionPlan type
             new_image, new_elements = simulate_action(
                 image, elements, llm_plan, username_for_login=username
             )
 
-            # Basic check if state actually changed
             state_changed = (
                 (id(new_image) != id(image))
                 or (len(elements) != len(new_elements))
@@ -171,7 +186,7 @@ def run_multi_step_demo():
                 )
             )
 
-            image, elements = new_image, new_elements  # Update state for next loop
+            image, elements = new_image, new_elements
 
             if state_changed:
                 logger.info(
@@ -182,7 +197,6 @@ def run_multi_step_demo():
                     "Simulation did not result in a detectable state change."
                 )
 
-            # Mark step as completed successfully before checking goal flag or pausing
             last_step_completed = step
 
             # 6. NOW check the flag to break *after* simulation
@@ -192,24 +206,21 @@ def run_multi_step_demo():
                 )
                 break
 
-            # Pause briefly between steps
             time.sleep(1)
 
         except Exception as e:
             logger.error(f"Error during step {step + 1}: {e}", exc_info=True)
-            break  # Stop on error
+            break
 
     # --- End of Loop ---
     logger.info("\n--- Multi-Step Synthetic Demo Finished ---")
     if goal_achieved_flag:
         logger.success("Overall goal marked as achieved by LLM during execution.")
     elif last_step_completed == MAX_STEPS - 1:
-        # Reached end without goal flag, but no error broke the loop
         logger.warning(
             f"Reached maximum steps ({MAX_STEPS}) without goal completion flag being set."
         )
     else:
-        # Loop broke early due to error or other condition
         logger.error(
             f"Execution stopped prematurely after Step {last_step_completed + 1} (check logs)."
         )
@@ -225,9 +236,10 @@ def run_multi_step_demo():
 
 
 if __name__ == "__main__":
-    # Add basic check for API key if running this directly
-    # (Although synthetic demo doesn't *strictly* need it if core allows planning without it)
-    # from omnimcp.config import config # Example if config is needed
+    # Optional: Add check for API key, though planning might work differently
+    # depending on whether core.plan_action_for_ui *requires* the LLM call
+    # or could potentially use non-LLM logic someday.
+    # from omnimcp.config import config
     # if not config.ANTHROPIC_API_KEY:
-    #    print("Warning: ANTHROPIC_API_KEY not found. LLM planning might fail.")
-    run_multi_step_demo()
+    #    logger.warning("ANTHROPIC_API_KEY not found. LLM planning might fail.")
+    run_synthetic_planner_demo()
