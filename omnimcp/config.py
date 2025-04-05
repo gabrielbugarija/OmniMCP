@@ -6,22 +6,31 @@ import os
 from typing import Optional
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class OmniMCPConfig(BaseSettings):
     """Configuration settings for OmniMCP."""
 
+    LLM_PROVIDER: str = "anthropic"
+
     # Claude API configuration
     ANTHROPIC_API_KEY: Optional[str] = None
     ANTHROPIC_DEFAULT_MODEL: str = "claude-3-7-sonnet-20250219"
     # ANTHROPIC_DEFAULT_MODEL: str = "claude-3-haiku-20240307"
 
-    # Auto-shutdown OmniParser after 60min inactivity
-    INACTIVITY_TIMEOUT_MINUTES: int = 60
-
     # OmniParser configuration
+    PROJECT_NAME: str = "omnimcp"
     OMNIPARSER_URL: Optional[str] = None
+    OMNIPARSER_DOWNSAMPLE_FACTOR: float = 1.0
+    OMNIPARSER_DOWNSAMPLE_FACTOR: float = Field(
+        1.0,
+        ge=0.1,  # Minimum factor 10%
+        le=1.0,  # Maximum factor 100%
+        description="Factor to downsample screenshot before OmniParser (lower=faster, less accurate)",
+    )
+    INACTIVITY_TIMEOUT_MINUTES: int = 60
 
     # AWS deployment settings (for remote OmniParser)
     AWS_ACCESS_KEY_ID: Optional[str] = None
@@ -29,7 +38,6 @@ class OmniMCPConfig(BaseSettings):
     AWS_REGION: Optional[str] = "us-west-2"
 
     # OmniParser deployment configuration
-    PROJECT_NAME: str = "omniparser"
     REPO_URL: str = "https://github.com/microsoft/OmniParser.git"
     # AWS_EC2_AMI: str = "ami-06835d15c4de57810"
     AWS_EC2_AMI: str = (
@@ -53,6 +61,7 @@ class OmniMCPConfig(BaseSettings):
     # Debug settings
     # DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
+    DEBUG_FULL_PROMPTS: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",

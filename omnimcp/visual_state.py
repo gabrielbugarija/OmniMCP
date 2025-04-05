@@ -10,24 +10,28 @@ from typing import Any, Dict, List, Optional, Tuple
 from PIL import Image
 from loguru import logger
 
-# Assuming OmniParserClient is correctly importable from its location
-from .omniparser.client import OmniParserClient
-from .types import Bounds, UIElement
-from .utils import take_screenshot
+from omnimcp.config import config
+from omnimcp.omniparser.client import OmniParserClient
+from omnimcp.types import Bounds, UIElement
+from omnimcp.utils import take_screenshot, downsample_image
 
 
 class VisualState:
     """
-    Manages the current state of visible UI elements by taking screenshots,
-    using OmniParserClient for analysis, and mapping results.
+    Manages the perceived state of the UI using screenshots and OmniParser.
+    Includes optional screenshot downsampling for performance via config.
     """
 
     def __init__(self, parser_client: OmniParserClient):
         """Initialize the visual state manager."""
         self.elements: List[UIElement] = []
         self.timestamp: Optional[float] = None
-        self.screen_dimensions: Optional[Tuple[int, int]] = None
-        self._last_screenshot: Optional[Image.Image] = None
+        self.screen_dimensions: Optional[Tuple[int, int]] = (
+            None  # Stores ORIGINAL dimensions
+        )
+        self._last_screenshot: Optional[Image.Image] = (
+            None  # Stores ORIGINAL screenshot
+        )
         self._parser_client = parser_client
         if not self._parser_client:
             logger.critical("VisualState initialized without a valid parser_client!")
@@ -36,22 +40,42 @@ class VisualState:
 
     def update(self) -> None:
         """
-        Update visual state: take screenshot, parse via client, map results.
-        Updates self.elements, self.timestamp, self.screen_dimensions.
+        Update visual state: take screenshot, optionally downsample,
+        parse via client, map results. Updates self.elements, self.timestamp,
+        self.screen_dimensions (original), self._last_screenshot (original).
         """
         logger.info("VisualState update requested...")
         start_time = time.time()
+        screenshot: Optional[Image.Image] = None  # Define screenshot outside try
         try:
             # 1. Capture screenshot
             logger.debug("Taking screenshot...")
             screenshot = take_screenshot()
             if screenshot is None:
                 raise RuntimeError("Failed to take screenshot.")
-            self._last_screenshot = screenshot
-            self.screen_dimensions = screenshot.size
-            logger.debug(f"Screenshot taken: dimensions={self.screen_dimensions}")
 
-            # 2. Process with UI parser client
+            # Store original screenshot and dimensions
+            self._last_screenshot = screenshot
+            original_dimensions = screenshot.size
+            self.screen_dimensions = original_dimensions
+            logger.debug(f"Screenshot taken: original dimensions={original_dimensions}")
+
+            # 2. Optionally Downsample before sending to parser (Read config here)
+            image_to_parse = screenshot
+            scale_factor = config.OMNIPARSER_DOWNSAMPLE_FACTOR
+            # Validate factor before calling downsample utility
+            if not (0.0 < scale_factor <= 1.0):
+                logger.warning(
+                    f"Invalid OMNIPARSER_DOWNSAMPLE_FACTOR ({scale_factor}). Must be > 0 and <= 1.0. Using original."
+                )
+                scale_factor = 1.0  # Reset to 1.0 if invalid
+
+            if scale_factor < 1.0:
+                # Call the utility function from utils.py
+                image_to_parse = downsample_image(screenshot, scale_factor)
+                # Logging is now handled within downsample_image
+
+            # 3. Process with UI parser client
             if not self._parser_client.server_url:
                 logger.error(
                     "OmniParser client server URL not available. Cannot parse."
@@ -60,10 +84,12 @@ class VisualState:
                 self.timestamp = time.time()
                 return
 
-            logger.debug(f"Parsing screenshot via {self._parser_client.server_url}...")
-            parser_result = self._parser_client.parse_image(screenshot)
+            logger.debug(
+                f"Parsing image (input size: {image_to_parse.size}) via {self._parser_client.server_url}..."
+            )
+            parser_result = self._parser_client.parse_image(image_to_parse)
 
-            # 3. Update elements list using the mapping logic
+            # 4. Update elements list using the mapping logic
             logger.debug("Mapping parser results...")
             self._update_elements_from_parser(parser_result)
             self.timestamp = time.time()
@@ -76,6 +102,11 @@ class VisualState:
             logger.error(f"Failed to update visual state: {e}", exc_info=True)
             self.elements = []
             self.timestamp = time.time()
+            # Ensure dimensions reflect original even on error if possible
+            if screenshot:
+                self.screen_dimensions = screenshot.size
+            else:
+                self.screen_dimensions = None
 
     def _update_elements_from_parser(self, parser_json: Dict):
         """Maps the raw JSON output from OmniParser to UIElement objects."""

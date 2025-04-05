@@ -46,11 +46,14 @@ Here is a list of UI elements currently visible on the screen (showing first 50 
     * If the goal requires an application (like 'calculator') that is *not* visible, and the previous action was *not* pressing the OS search key ("Cmd+Space" or "Win"), then the next action is to press the OS search key: `action: "press_key"`, `key_info: "Cmd+Space"` (or "Win" depending on OS).
     * **IMPORTANT:** If the previous action *was* pressing the OS search key, AND a search input field is now visible in the **Current UI Elements**, then the next action is to type the application name: `action: "type"`, `text_to_type: "Calculator"` (or the specific app name needed), `element_id: <ID of search input field, if available, otherwise null>`.
     * If the previous action was typing the application name into search, the next action is to press Enter: `action: "press_key"`, `key_info: "Enter"`.
-4.  **General Action Selection:**
-    * If not launching an app, identify the most relevant visible UI element to interact with next (click, type). Choose `action: "click"` or `action: "type"` and provide the correct `element_id`.
-    * If typing into a field, set `text_to_type`. Otherwise, it must be null.
-    * Use `action: "scroll"` (e.g., `key_info: "down"`) if necessary to find elements, setting other fields to null.
-    * For any `press_key` action, `element_id` and `text_to_type` must be null. Provide the key name/combo in `key_info`.
+4.  **General Action Selection & Output Format Rules:**
+    * Identify the most relevant visible UI element for the next logical step based on your reasoning.
+    * **Rule 1:** If `action` is 'click', `element_id` MUST be the integer ID of a visible element from the list. `text_to_type` and `key_info` MUST be null.
+    * **Rule 2:** If `action` is 'type', `text_to_type` MUST be the string to type. `key_info` MUST be null. `element_id` SHOULD be the ID of the target field if identifiable, otherwise null (if typing into a general area like Spotlight).
+    * **Rule 3:** If `action` is 'press_key', `key_info` MUST be the key/shortcut string (e.g., 'Enter', 'Cmd+Space', 'a', '*'). `element_id` and `text_to_type` MUST be null.
+    * **Rule 4:** If `action` is 'scroll', provide scroll details if possible (or default to generic scroll). `element_id`, `text_to_type`, `key_info` MUST be null.
+    * **Rule 5:** If the desired element for the next logical step (e.g., the '*' button) is **not found** in the 'Current UI Elements', DO NOT choose `action: "click"` with `element_id: null`. Instead, consider if an alternative valid action like `action: "press_key"` (e.g., with `key_info: "*"`) can achieve the result. If no suitable action exists, explain this in the reasoning and select an action like waiting or reporting failure if appropriate (though the current actions don't support waiting/failure reporting well).
+    * **Rule 6:** Ensure your entire output is ONLY the single, valid JSON object conforming to the structure, with no extra text or markdown.
 5.  **Goal Completion:** If the goal is fully achieved, set `is_goal_complete: true`. Otherwise, set `is_goal_complete: false`.
 6.  **Output Format:** Respond ONLY with a valid JSON object matching the structure below. Do NOT include ```json markdown.
 

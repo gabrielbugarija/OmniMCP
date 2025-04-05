@@ -596,3 +596,43 @@ def draw_action_highlight(
         return image.copy()  # Return copy of original on error
 
     return final_image
+
+
+def downsample_image(image: Image.Image, factor: float) -> Image.Image:
+    """
+    Downsamples a PIL Image by a given factor using LANCZOS resampling.
+
+    Args:
+        image: The original PIL Image.
+        factor: The scaling factor (e.g., 0.5 for 50%). Must be > 0 and <= 1.
+
+    Returns:
+        The downsampled PIL Image. Returns original if factor is invalid or error occurs.
+    """
+    if not (0.0 < factor <= 1.0):
+        logger.warning(
+            f"Invalid downsample factor ({factor}). Returning original image."
+        )
+        return image
+    if factor == 1.0:
+        return image  # No scaling needed
+
+    try:
+        original_dimensions = image.size
+        new_width = int(original_dimensions[0] * factor)
+        new_height = int(original_dimensions[1] * factor)
+        # Ensure dimensions are at least 1x1
+        new_width = max(1, new_width)
+        new_height = max(1, new_height)
+
+        start_time = time.time()
+        # Use LANCZOS for potentially better quality downsampling
+        scaled_image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        duration = (time.time() - start_time) * 1000
+        logger.debug(
+            f"Resized image from {original_dimensions} to {scaled_image.size} (factor {factor:.2f}) in {duration:.1f}ms"
+        )
+        return scaled_image
+    except Exception as resize_err:
+        logger.warning(f"Failed to downsample image, returning original: {resize_err}")
+        return image  # Fallback to original on error
