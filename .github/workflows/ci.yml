@@ -51,4 +51,4 @@ jobs:
 
       # --- 8. Smoke test cli.lpy
       - name: Run CLI Smoke Test (--help)
-        run: python cli.py --help
+        run: uv run python cli.py --help
