@@ -13,10 +13,10 @@ from omnimcp.agent_executor import (
     ExecutionInterface,
     PlannerCallable,
 )
+from omnimcp import agent_executor
 from omnimcp.types import LLMActionPlan, UIElement
 
 
-# --- Mock Components (used in fixtures) ---
 class MockPerception(PerceptionInterface):
     def __init__(
         self,
@@ -28,18 +28,21 @@ class MockPerception(PerceptionInterface):
         self.screen_dimensions = dims
         self._last_screenshot = image
         self.update_call_count = 0
-        self.fail_on_update = False
+        self.fail_on_update = False  # Flag to simulate failure
 
     def update(self) -> None:
-        if self.fail_on_update and self.update_call_count > 0:
+        if (
+            self.fail_on_update and self.update_call_count > 0
+        ):  # Fail on second+ call if requested
             raise ConnectionError("Mock perception failure")
         self.update_call_count += 1
+        # Simulate state update if needed, or keep static for simple tests
 
 
 class MockExecution(ExecutionInterface):
     def __init__(self):
         self.calls = []
-        self.fail_on_action: Optional[str] = None
+        self.fail_on_action: Optional[str] = None  # e.g., "click" to make click fail
 
     def click(self, x: int, y: int, click_type: str = "single") -> bool:
         self.calls.append(("click", x, y, click_type))
@@ -59,9 +62,11 @@ class MockExecution(ExecutionInterface):
 
 
 # --- Pytest Fixtures ---
+
+
 @pytest.fixture
 def mock_image() -> Image.Image:
-    return Image.new("RGB", (200, 100), color="gray")
+    return Image.new("RGB", (200, 100), color="gray")  # Slightly larger default
 
 
 @pytest.fixture
@@ -81,29 +86,31 @@ def mock_execution_component() -> MockExecution:
 
 @pytest.fixture
 def mock_box_drawer() -> MagicMock:
-    return MagicMock(return_value=Image.new("RGB", (1, 1)))
+    return MagicMock(return_value=Image.new("RGB", (1, 1)))  # Return dummy image
 
 
 @pytest.fixture
 def mock_highlighter() -> MagicMock:
-    return MagicMock(return_value=Image.new("RGB", (1, 1)))
+    return MagicMock(return_value=Image.new("RGB", (1, 1)))  # Return dummy image
 
 
 @pytest.fixture
 def temp_output_dir(tmp_path) -> str:
+    """Create a temporary directory for test run outputs."""
+    # tmp_path is a pytest fixture providing a Path object to a unique temp dir
     output_dir = tmp_path / "test_runs"
     output_dir.mkdir()
     return str(output_dir)
+
+
+# --- Mock Planners ---
 
 
 def planner_completes_on_step(n: int) -> PlannerCallable:
     """Factory for a planner that completes on step index `n`."""
 
     def mock_planner(
-        elements: List[UIElement],
-        user_goal: str,
-        action_history: List[str],
-        step: int,
+        elements: List[UIElement], user_goal: str, action_history: List[str], step: int
     ) -> Tuple[LLMActionPlan, Optional[UIElement]]:
         target_element = elements[0] if elements else None
         is_complete = step == n
@@ -127,18 +134,12 @@ def planner_never_completes() -> PlannerCallable:
     """Planner that never signals goal completion."""
 
     def mock_planner(
-        elements: List[UIElement],
-        user_goal: str,
-        action_history: List[str],
-        step: int,
+        elements: List[UIElement], user_goal: str, action_history: List[str], step: int
     ) -> Tuple[LLMActionPlan, Optional[UIElement]]:
         target_element = elements[0] if elements else None
         element_id = target_element.id if target_element else None
         plan = LLMActionPlan(
-            reasoning=(
-                f"Mock reasoning step {step + 1} for goal '{user_goal}', "
-                "goal not complete"
-            ),
+            reasoning=f"Mock reasoning step {step + 1} for goal '{user_goal}', goal not complete",
             action="click",
             element_id=element_id,
             text_to_type=None,
@@ -159,14 +160,25 @@ def planner_fails() -> PlannerCallable:
     return failing_planner
 
 
+# --- Test Functions ---
+
+
 def test_run_completes_goal(
     mock_perception_component: MockPerception,
     mock_execution_component: MockExecution,
     mock_box_drawer: MagicMock,
     mock_highlighter: MagicMock,
     temp_output_dir: str,
+    mocker,  # Add mocker fixture
 ):
     """Test a successful run where the goal is completed on the second step."""
+    # --- Add Mock for take_screenshot to avoid $DISPLAY error in CI ---
+    mock_final_image = Image.new("RGB", (50, 50), color="green")  # Dummy image
+    mocker.patch.object(
+        agent_executor, "take_screenshot", return_value=mock_final_image
+    )
+    # --- End Mock ---
+
     complete_step_index = 1
     executor = AgentExecutor(
         perception=mock_perception_component,
@@ -205,8 +217,16 @@ def test_run_reaches_max_steps(
     mock_box_drawer: MagicMock,
     mock_highlighter: MagicMock,
     temp_output_dir: str,
+    mocker,  # Add mocker fixture for consistency, patch take_screenshot here too
 ):
     """Test reaching max_steps without completing the goal."""
+    # --- Add Mock for take_screenshot to avoid $DISPLAY error in CI ---
+    mock_final_image = Image.new("RGB", (50, 50), color="blue")  # Dummy image
+    mocker.patch.object(
+        agent_executor, "take_screenshot", return_value=mock_final_image
+    )
+    # --- End Mock ---
+
     max_steps = 3
     executor = AgentExecutor(
         perception=mock_perception_component,
@@ -226,14 +246,27 @@ def test_run_reaches_max_steps(
     assert len(executor.action_history) == max_steps
     assert mock_box_drawer.call_count == max_steps
     assert mock_highlighter.call_count == max_steps
+    # Also check final state image existence here
+    run_dirs = os.listdir(temp_output_dir)
+    assert len(run_dirs) == 1
+    run_dir_path = os.path.join(temp_output_dir, run_dirs[0])
+    assert os.path.exists(os.path.join(run_dir_path, "final_state.png"))
 
 
 def test_run_perception_failure(
     mock_perception_component: MockPerception,
     mock_execution_component: MockExecution,
     temp_output_dir: str,
+    mocker,  # Add mocker fixture
 ):
     """Test that the loop stops if perception fails on the second step."""
+    # --- Add Mock for take_screenshot to avoid $DISPLAY error in CI ---
+    mock_final_image = Image.new("RGB", (50, 50), color="red")  # Dummy image
+    mocker.patch.object(
+        agent_executor, "take_screenshot", return_value=mock_final_image
+    )
+    # --- End Mock ---
+
     mock_perception_component.fail_on_update = True  # Configure mock to fail
     executor = AgentExecutor(
         perception=mock_perception_component,
@@ -251,14 +284,27 @@ def test_run_perception_failure(
     )  # First call ok, fails during second
     assert len(mock_execution_component.calls) == 1  # Only first step executed
     assert len(executor.action_history) == 1
+    # Check final state image existence
+    run_dirs = os.listdir(temp_output_dir)
+    assert len(run_dirs) == 1
+    run_dir_path = os.path.join(temp_output_dir, run_dirs[0])
+    assert os.path.exists(os.path.join(run_dir_path, "final_state.png"))
 
 
 def test_run_planning_failure(
     mock_perception_component: MockPerception,
     mock_execution_component: MockExecution,
     temp_output_dir: str,
+    mocker,  # Add mocker fixture
 ):
     """Test that the loop stops if planning fails."""
+    # --- Add Mock for take_screenshot to avoid $DISPLAY error in CI ---
+    mock_final_image = Image.new("RGB", (50, 50), color="yellow")  # Dummy image
+    mocker.patch.object(
+        agent_executor, "take_screenshot", return_value=mock_final_image
+    )
+    # --- End Mock ---
+
     executor = AgentExecutor(
         perception=mock_perception_component,
         planner=planner_fails(),
@@ -274,14 +320,27 @@ def test_run_planning_failure(
         mock_perception_component.update_call_count == 1
     )  # Perception called once before planning
     assert len(mock_execution_component.calls) == 0  # Execution never reached
+    # Check final state image existence
+    run_dirs = os.listdir(temp_output_dir)
+    assert len(run_dirs) == 1
+    run_dir_path = os.path.join(temp_output_dir, run_dirs[0])
+    assert os.path.exists(os.path.join(run_dir_path, "final_state.png"))
 
 
 def test_run_execution_failure(
     mock_perception_component: MockPerception,
     mock_execution_component: MockExecution,
     temp_output_dir: str,
+    mocker,  # Add mocker fixture
 ):
     """Test that the loop stops if execution fails."""
+    # --- Add Mock for take_screenshot to avoid $DISPLAY error in CI ---
+    mock_final_image = Image.new("RGB", (50, 50), color="purple")  # Dummy image
+    mocker.patch.object(
+        agent_executor, "take_screenshot", return_value=mock_final_image
+    )
+    # --- End Mock ---
+
     mock_execution_component.fail_on_action = "click"  # Make the click action fail
     executor = AgentExecutor(
         perception=mock_perception_component,
@@ -299,6 +358,11 @@ def test_run_execution_failure(
     assert executor.action_history[0].startswith(
         "Step 1: Planned click"
     )  # History includes planned action
+    # Check final state image existence
+    run_dirs = os.listdir(temp_output_dir)
+    assert len(run_dirs) == 1
+    run_dir_path = os.path.join(temp_output_dir, run_dirs[0])
+    assert os.path.exists(os.path.join(run_dir_path, "final_state.png"))
 
 
 @pytest.mark.parametrize("scaling_factor", [1, 2])
@@ -311,6 +375,14 @@ def test_coordinate_scaling_for_click(
     scaling_factor: int,
 ):
     """Verify coordinate scaling is applied before calling execution.click."""
+    # --- Add Mock for take_screenshot to avoid $DISPLAY error in CI ---
+    # (Not strictly necessary here as loop only runs 1 step, but good practice)
+    mock_final_image = Image.new("RGB", (50, 50), color="orange")  # Dummy image
+    mocker.patch.object(
+        agent_executor, "take_screenshot", return_value=mock_final_image
+    )
+    # --- End Mock ---
+
     planner_click = MagicMock(
         return_value=(
             LLMActionPlan(
@@ -322,8 +394,9 @@ def test_coordinate_scaling_for_click(
             mock_element,
         )
     )
-    mocker.patch(
-        "omnimcp.agent_executor.get_scaling_factor", return_value=scaling_factor
+    # Patch get_scaling_factor within the agent_executor module
+    mocker.patch.object(
+        agent_executor, "get_scaling_factor", return_value=scaling_factor
     )
 
     executor = AgentExecutor(
@@ -348,3 +421,8 @@ def test_coordinate_scaling_for_click(
         expected_logical_y,
         "single",
     )
+    # Check final state image existence
+    run_dirs = os.listdir(temp_output_dir)
+    assert len(run_dirs) == 1
+    run_dir_path = os.path.join(temp_output_dir, run_dirs[0])
+    assert os.path.exists(os.path.join(run_dir_path, "final_state.png"))
