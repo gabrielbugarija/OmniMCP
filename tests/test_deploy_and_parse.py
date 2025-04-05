@@ -10,7 +10,7 @@ import asyncio  # Needed for async VisualState.update()
 
 from omnimcp.utils import logger
 from omnimcp.omniparser.client import OmniParserClient
-from omnimcp.omnimcp import VisualState
+from omnimcp.visual_state import VisualState
 
 
 if __name__ == "__main__":

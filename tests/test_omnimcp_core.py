@@ -9,11 +9,9 @@ import pytest
 from unittest.mock import patch, MagicMock  # Keep MagicMock
 from PIL import Image, ImageDraw
 
-# Imports can be at the top now
-from omnimcp.omnimcp import OmniMCP, VisualState
-from omnimcp.types import (
-    ActionVerification,
-)  # Keep Bounds if needed by other tests
+from omnimcp.mcp_server import OmniMCP
+from omnimcp.visual_state import VisualState
+from omnimcp.types import ActionVerification
 from omnimcp.input import InputController
 
 
@@ -83,7 +81,7 @@ def test_visual_state_parsing(synthetic_ui_data, mock_parser_client):
     test_img, _, elements_expected_list_of_dicts = synthetic_ui_data
 
     # Patch take_screenshot used within visual_state.update
-    with patch("omnimcp.omnimcp.take_screenshot", return_value=test_img):
+    with patch("omnimcp.visual_state.take_screenshot", return_value=test_img):
         visual_state = VisualState(parser_client=mock_parser_client)
         assert not visual_state.elements
         assert visual_state.screen_dimensions is None
@@ -109,7 +107,7 @@ def test_element_finding(synthetic_ui_data, mock_parser_client):
     """Test VisualState.find_element locates elements using basic matching."""
     test_img, _, _ = synthetic_ui_data
 
-    with patch("omnimcp.omnimcp.take_screenshot", return_value=test_img):
+    with patch("omnimcp.visual_state.take_screenshot", return_value=test_img):
         visual_state = VisualState(parser_client=mock_parser_client)
         visual_state.update()  # Populate state
 
@@ -131,15 +129,16 @@ def test_element_finding(synthetic_ui_data, mock_parser_client):
 
 
 # Patch dependencies of OmniMCP.__init__ and its methods
+@patch("omnimcp.mcp_server.OmniParserClient")  # Patched where OmniMCP class imports it
+@patch("omnimcp.mcp_server.InputController")  # Patched where OmniMCP class imports it
 @patch(
-    "omnimcp.omnimcp.OmniParserClient"
-)  # Mock the client class used by VS within OmniMCP
-@patch("omnimcp.omnimcp.InputController")  # Mock the unified controller used by OmniMCP
-@patch(
-    "omnimcp.omnimcp.take_screenshot"
-)  # Mock screenshot function called by VS update
+    "omnimcp.visual_state.take_screenshot"
+)  # Patched where VisualState class imports it
 def test_action_verification(
-    mock_take_screenshot, MockInputController, MockOmniParserClientClass
+    # Args correspond to patches bottom-up
+    mock_take_screenshot,
+    MockInputController,  # Corresponds to patch("...InputController")
+    MockOmniParserClientClass,  # Corresponds to patch("...OmniParserClient")
 ):
     """
     Test the _verify_action method on an OmniMCP instance.
