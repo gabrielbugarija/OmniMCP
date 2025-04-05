@@ -48,3 +48,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: "ci_dummy_key"
         run: uv run pytest tests/
+
+      # --- 8. Smoke test cli.lpy
+      - name: Run CLI Smoke Test (--help)
+        run: python cli.py --help

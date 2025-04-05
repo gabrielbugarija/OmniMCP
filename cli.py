@@ -16,7 +16,7 @@ from omnimcp.config import config
 from omnimcp.core import plan_action_for_ui
 from omnimcp.input import InputController, _pynput_error  # Check pynput import status
 from omnimcp.omniparser.client import OmniParserClient
-from omnimcp.omnimcp import VisualState
+from omnimcp.visual_state import VisualState
 from omnimcp.utils import (
     logger,
     draw_bounding_boxes,
