@@ -1,275 +1,172 @@
 # OmniMCP
 
-OmniMCP provides rich UI context and interaction capabilities to AI models through [Model Context Protocol (MCP)](https://github.com/modelcontextprotocol) and [microsoft/OmniParser](https://github.com/microsoft/OmniParser). It focuses on enabling deep understanding of user interfaces through visual analysis, structured responses, and precise interaction.
+[![CI](https://github.com/OpenAdaptAI/OmniMCP/actions/workflows/ci.yml/badge.svg)](https://github.com/OpenAdaptAI/OmniMCP/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python Version](https://img.shields.io/badge/python-3.10%20|%203.11%20|%203.12-blue)](https://www.python.org/)
+[![Code style: ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+
+OmniMCP provides rich UI context and interaction capabilities to AI models through [Model Context Protocol (MCP)](https://github.com/modelcontextprotocol) and [microsoft/OmniParser](https://github.com/microsoft/OmniParser). It focuses on enabling deep understanding of user interfaces through visual analysis, structured planning, and precise interaction execution.
 
 ## Core Features
 
-- **Rich Visual Context**: Deep understanding of UI elements 
-- **Natural Language Interface**: Target and analyze elements using natural descriptions
-- **Comprehensive Interactions**: Full range of UI operations with verification
-- **Structured Types**: Clean, typed responses using dataclasses
-- **Robust Error Handling**: Detailed error context and recovery strategies
+- **Visual Perception:** Understands UI elements using OmniParser.
+- **LLM Planning:** Plans next actions based on goal, history, and visual state.
+- **Agent Executor:** Orchestrates the perceive-plan-act loop (`omnimcp/agent_executor.py`).
+- **Action Execution:** Controls mouse/keyboard via `pynput` (`omnimcp/input.py`).
+- **CLI Interface:** Simple entry point (`cli.py`) for running tasks.
+- **Auto-Deployment:** Optional OmniParser server deployment to AWS EC2 with auto-shutdown.
+- **Debugging:** Generates timestamped visual logs per step.
 
 ## Overview
 
-<p align="center">
-    <img src="https://github.com/user-attachments/assets/9b2f0c8b-fadf-4170-8f57-1ac958febd39" width="400" alt="Spatial Feature Understanding">
-</p>
+`cli.py` uses `AgentExecutor` to run a perceive-plan-act loop. It captures the screen (`VisualState`), plans using an LLM (`core.plan_action_for_ui`), and executes actions (`InputController`).
 
-1. **Spatial Feature Understanding**: OmniMCP begins by developing a deep understanding of the user interface's visual layout. Leveraging [microsoft/OmniParser](https://github.com/microsoft/OmniParser), it performs detailed visual parsing, segmenting the screen and identifying all interactive and informational elements. This includes recognizing their types, content, spatial relationships, and attributes, creating a rich representation of the UI's static structure.
+### Demos
 
-<br>
+- **Real Action (Calculator):** `python cli.py` opens Calculator and computes 5*9.
+  ![OmniMCP Real Action Demo GIF](images/omnimcp_demo.gif)
+- **Synthetic UI (Login):** `python demo_synthetic.py` uses generated images (no real I/O). *(Note: Pending refactor to use AgentExecutor).*
+  ![OmniMCP Synthetic Demo GIF](images/omnimcp_demo_synthetic.gif)
 
-<p align="center">
-    <img src="https://github.com/user-attachments/assets/b8c076bf-0d46-4130-9e7f-7e34b978e1c9" width="400" alt="Temporal Feature Understanding">
-</p>
+## Prerequisites
 
-2. **Temporal Feature Understanding**: To capture the dynamic aspects of the UI, OmniMCP tracks user interactions and the resulting state transitions. It records sequences of actions and changes within the UI, building a Process Graph that represents the flow of user workflows. This temporal understanding allows AI models to reason about interaction history and plan future actions based on context.
+- Python >=3.10, <3.13
+- `uv` installed (`pip install uv`)
+- **Linux Runtime Requirement:** Requires an active graphical session (X11/Wayland) for `pynput`. May need system libraries (`libx11-dev`, etc.) - see `pynput` docs.
 
-<br>
+*(macOS display scaling dependencies are handled automatically during installation).*
 
-<p align="center">
-    <img src="https://github.com/user-attachments/assets/c5fa1d28-b79e-4269-9340-6f36e6746a12" width="400" alt="Internal API Generation">
-</p>
+### For AWS Deployment Features
 
-3. **Internal API Generation**: Utilizing the rich spatial and temporal context it has acquired, OmniMCP leverages a Large Language Model (LLM) to generate an internal, context-specific API. Through In-Context Learning (prompting), the LLM dynamically creates a set of functions and parameters that accurately reflect the understood spatiotemporal features of the UI. This internal API is tailored to the current state and interaction history, enabling precise and context-aware interactions.
+Requires AWS credentials in `.env` (see `.env.example`). **Warning:** Creates AWS resources (EC2, Lambda, etc.) incurring costs. Use `python -m omnimcp.omniparser.server stop` to clean up.
 
-<br>
-
-<p align="center">
-    <img src="https://github.com/user-attachments/assets/78d31af5-0394-4dfc-a48e-97b524e04878" width="400" alt="External API Publication (MCP)">
-</p>
-
-4. **External API Publication (MCP)**: Finally, OmniMCP exposes this dynamically generated internal API through the [Model Context Protocol (MCP)](https://github.com/modelcontextprotocol). This provides a consistent and straightforward interface for both humans (via natural language translated by the LLM) and AI models to interact with the UI. Through this MCP interface, a full range of UI operations can be performed with verification, all powered by the AI model's deep, dynamically created understanding of the UI's spatiotemporal context.
+```.env
+AWS_ACCESS_KEY_ID=YOUR_ACCESS_KEY
+AWS_SECRET_ACCESS_KEY=YOUR_SECRET_KEY
+ANTHROPIC_API_KEY=YOUR_ANTHROPIC_KEY
+# OMNIPARSER_URL=http://... # Optional: Skip auto-deploy
+```
 
 ## Installation
 
 ```bash
-pip install omnimcp
-
-# Or from source:
-git clone https://github.com/OpenAdaptAI/omnimcp.git
-cd omnimcp
-./install.sh
+git clone [https://github.com/OpenAdaptAI/OmniMCP.git](https://github.com/OpenAdaptAI/OmniMCP.git)
+cd OmniMCP
+./install.sh # Creates .venv, installs deps incl. test extras
+cp .env.example .env
+# Edit .env with your keys
+# Activate: source .venv/bin/activate (Linux/macOS) or relevant Windows command
 ```
 
 ## Quick Start
 
-```python
-from omnimcp import OmniMCP
-from omnimcp.types import UIElement, ScreenState, InteractionResult
+Ensure environment is activated and `.env` is configured.
 
-async def main():
-    mcp = OmniMCP()
-    
-    # Get current UI state
-    state: ScreenState = await mcp.get_screen_state()
-    
-    # Analyze specific element
-    description = await mcp.describe_element(
-        "error message in red text"
-    )
-    print(f"Found element: {description}")
-    
-    # Interact with UI
-    result = await mcp.click_element(
-        "Submit button",
-        click_type="single"
-    )
-    if not result.success:
-        print(f"Click failed: {result.error}")
+```bash
+# Run default goal (Calculator task)
+python cli.py
 
-asyncio.run(main())
+# Run custom goal
+python cli.py --goal "Your goal here"
+
+# See options
+python cli.py --help
 ```
+Debug outputs are saved in `runs/<timestamp>/`.
 
-## Core Types
-
-```python
-@dataclass
-class UIElement:
-    type: str          # button, text, slider, etc
-    content: str       # Text or semantic content
-    bounds: Bounds     # Normalized coordinates
-    confidence: float  # Detection confidence
-    attributes: Dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> Dict:
-        """Convert to serializable dict"""
-    
-@dataclass
-class ScreenState:
-    elements: List[UIElement]
-    dimensions: tuple[int, int]
-    timestamp: float
-    
-    def find_elements(self, query: str) -> List[UIElement]:
-        """Find elements matching natural query"""
-    
-@dataclass
-class InteractionResult:
-    success: bool
-    element: Optional[UIElement]
-    error: Optional[str] = None
-    context: Dict[str, Any] = field(default_factory=dict)
-```
-
-## MCP Implementation and Framework API
-
-OmniMCP provides a powerful yet intuitive API for model interaction through the Model Context Protocol (MCP). This standardized interface enables seamless integration between large language models and UI automation capabilities.
-
-### Core API
-
-```python
-async def describe_current_state() -> str:
-    """Get rich description of current UI state"""
-
-async def find_elements(query: str) -> List[UIElement]:
-    """Find elements matching natural query"""
-
-async def take_action(
-    description: str,
-    image_context: Optional[bytes] = None
-) -> ActionResult:
-    """Execute action described in natural language with optional visual context"""
-```
+**Note on MCP Server:** An experimental MCP server (`OmniMCP` class in `omnimcp/mcp_server.py`) exists but is separate from the primary `cli.py`/`AgentExecutor` workflow.
 
 ## Architecture
 
-### Core Components
-
-1. **Visual State Manager**
-   - Element detection
-   - State management and caching
-   - Rich context extraction
-   - History tracking
-
-2. **MCP Tools**
-   - Tool definitions and execution
-   - Typed responses
-   - Error handling
-   - Debug support
-
-3. **UI Parser**
-   - Element detection
-   - Text recognition
-   - Visual analysis
-   - Element relationships
-
-4. **Input Controller**
-   - Precise mouse control
-   - Keyboard input
-   - Action verification
-   - Movement optimization
+1.  **CLI** (`cli.py`) - Entry point, setup, starts Executor.
+2.  **Agent Executor** (`omnimcp/agent_executor.py`) - Orchestrates loop, manages state/artifacts.
+3.  **Visual State Manager** (`omnimcp/visual_state.py`) - Perception (screenshot, calls parser).
+4.  **OmniParser Client & Deploy** (`omnimcp/omniparser/`) - Manages OmniParser server communication/deployment.
+5.  **LLM Planner** (`omnimcp/core.py`) - Generates action plan.
+6.  **Input Controller** (`omnimcp/input.py`) - Executes actions (mouse/keyboard).
+7.  **(Optional) MCP Server** (`omnimcp/mcp_server.py`) - Experimental MCP interface.
 
 ## Development
 
-### Environment Setup
+### Environment Setup & Checks
 ```bash
-# Create development environment
-./install.sh --dev
-
-# Run tests
-pytest tests/
-
-# Run linting
-ruff check .
+# Setup (if not done): ./install.sh
+# Activate env: source .venv/bin/activate (or similar)
+# Format/Lint: uv run ruff format . && uv run ruff check . --fix
+# Run tests: uv run pytest tests/
 ```
 
 ### Debug Support
-```python
-@dataclass
-class DebugContext:
-    """Rich debug information"""
-    tool_name: str
-    inputs: Dict[str, Any]
-    result: Any
-    duration: float
-    visual_state: Optional[ScreenState]
-    error: Optional[Dict] = None
-    
-    def save_snapshot(self, path: str) -> None:
-        """Save debug snapshot for analysis"""
+Running `python cli.py` saves timestamped runs in `runs/`, including:
+* `step_N_state_raw.png`
+* `step_N_state_parsed.png` (with element boxes)
+* `step_N_action_highlight.png` (with action highlight)
+* `final_state.png`
 
-# Enable debug mode
-mcp = OmniMCP(debug=True)
+Detailed logs are in `logs/run_YYYY-MM-DD_HH-mm-ss.log` (`LOG_LEVEL=DEBUG` in `.env` recommended).
 
-# Get debug context
-debug_info = await mcp.get_debug_context()
-print(f"Last operation: {debug_info.tool_name}")
-print(f"Duration: {debug_info.duration}ms")
+<details>
+<summary>Example Log Snippet (Auto-Deploy + Agent Step)</summary>
+
+```log
+# --- Initialization & Auto-Deploy ---
+2025-MM-DD HH:MM:SS | INFO     | omnimcp.omniparser.client:... - No server_url provided, attempting discovery/deployment...
+2025-MM-DD HH:MM:SS | INFO     | omnimcp.omniparser.server:... - Creating new EC2 instance...
+2025-MM-DD HH:MM:SS | SUCCESS  | omnimcp.omniparser.server:... - Instance i-... is running. Public IP: ...
+2025-MM-DD HH:MM:SS | INFO     | omnimcp.omniparser.server:... - Setting up auto-shutdown infrastructure...
+2025-MM-DD HH:MM:SS | SUCCESS  | omnimcp.omniparser.server:... - Auto-shutdown infrastructure setup completed...
+... (SSH connection, Docker setup) ...
+2025-MM-DD HH:MM:SS | SUCCESS  | omnimcp.omniparser.client:... - Auto-deployment successful. Server URL: http://...
+... (Agent Executor Init) ...
+
+# --- Agent Execution Loop Example Step ---
+2025-MM-DD HH:MM:SS | INFO     | omnimcp.agent_executor:run:... - --- Step N/10 ---
+2025-MM-DD HH:MM:SS | DEBUG    | omnimcp.agent_executor:run:... - Perceiving current screen state...
+2025-MM-DD HH:MM:SS | INFO     | omnimcp.visual_state:update:... - VisualState update complete. Found X elements. Took Y.YYs.
+2025-MM-DD HH:MM:SS | INFO     | omnimcp.agent_executor:run:... - Perceived state with X elements.
+... (Save artifacts) ...
+2025-MM-DD HH:MM:SS | DEBUG    | omnimcp.agent_executor:run:... - Planning next action...
+... (LLM Call) ...
+2025-MM-DD HH:MM:SS | INFO     | omnimcp.agent_executor:run:... - LLM Plan: Action=..., TargetID=..., GoalComplete=False
+2025-MM-DD HH:MM:SS | DEBUG    | omnimcp.agent_executor:run:... - Added to history: Step N: Planned action ...
+2025-MM-DD HH:MM:SS | INFO     | omnimcp.agent_executor:run:... - Executing action: ...
+2025-MM-DD HH:MM:SS | SUCCESS  | omnimcp.agent_executor:run:... - Action executed successfully.
+2025-MM-DD HH:MM:SS | DEBUG    | omnimcp.agent_executor:run:... - Step N duration: Z.ZZs
+... (Loop continues or finishes) ...
 ```
+*(Note: Details like timings, counts, IPs, instance IDs, and specific plans will vary)*
+</details>
 
-## Configuration
+## Roadmap & Limitations
 
-```python
-# .env or environment variables
-OMNIMCP_DEBUG=1             # Enable debug mode
-OMNIMCP_PARSER_URL=http://... # Custom parser URL
-OMNIMCP_LOG_LEVEL=DEBUG    # Log level
-```
+Key limitations & future work areas:
 
-## Performance Considerations
+* **Performance:** Reduce OmniParser latency (explore local models, caching, etc.) and optimize state management (avoid full re-parse).
+* **Robustness:** Improve LLM planning reliability (prompts, techniques like ReAct), add action verification/error recovery, enhance element targeting.
+* **Target API/Architecture:** Evolve towards a higher-level declarative API (e.g., `@omni.publish` style) and potentially integrate loop logic with the experimental MCP Server (`OmniMCP` class).
+* **Consistency:** Refactor `demo_synthetic.py` to use `AgentExecutor`.
+* **Features:** Expand action space (drag/drop, hover).
+* **Testing:** Add E2E tests, broaden cross-platform validation, define evaluation metrics.
+* **Research:** Explore fine-tuning, process graphs (RAG), framework integration.
 
-1. **State Management**
-   - Smart caching
-   - Incremental updates
-   - Background processing
-   - Efficient invalidation
+## Project Status
 
-2. **Element Targeting**
-   - Efficient search
-   - Early termination
-   - Result caching
-   - Smart retries
-
-3. **Visual Analysis**
-   - Minimal screen captures
-   - Region-based updates
-   - Parser optimization
-   - Result caching
-
-## Limitations and Future Work
-
-Current limitations include:
-- Need for more extensive validation across UI patterns
-- Optimization of pattern recognition in process graphs
-- Refinement of spatial-temporal feature synthesis
-
-### Future Research Directions
-
-Beyond reinforcement learning integration, we plan to explore:
-- **Fine-tuning Specialized Models**: Training domain-specific models on UI automation tasks to improve efficiency and reduce token usage
-- **Process Graph Embeddings with RAG**: Embedding generated process graph descriptions and retrieving relevant interaction patterns via Retrieval Augmented Generation
-- Development of comprehensive evaluation metrics
-- Enhanced cross-platform generalization
-- Integration with broader LLM architectures
-- Collaborative multi-agent UI automation frameworks
+Core loop via `cli.py`/`AgentExecutor` is functional for basic tasks. Performance and robustness need significant improvement. MCP integration is experimental.
 
 ## Contributing
 
 1. Fork repository
 2. Create feature branch
-3. Implement changes
-4. Add tests
+3. Implement changes & add tests
+4. Ensure checks pass (`uv run ruff format .`, `uv run ruff check . --fix`, `uv run pytest tests/`)
 5. Submit pull request
 
 ## License
 
 MIT License
 
-## Project Status
-
-Active development - API may change
-
----
-
-For detailed implementation guidance, see [CLAUDE.md](CLAUDE.md).
-For API reference, see [API.md](API.md).
-
 ## Contact
 
-- Issues: GitHub Issues
-- Questions: Discussions
+- Issues: [GitHub Issues](https://github.com/OpenAdaptAI/OmniMCP/issues)
+- Questions: [Discussions](https://github.com/OpenAdaptAI/OmniMCP/discussions)
 - Security: security@openadapt.ai
-
-Remember: OmniMCP focuses on providing rich UI context through visual understanding. Design for clarity, build with structure, and maintain robust error handling.
